@@ -1,0 +1,20 @@
+services:
+  jobmanager:
+    build: .
+    image: bicycle:dev
+    entrypoint: ["/usr/local/bin/jobmanager"]
+    command: ["--bind", "0.0.0.0:9000"]
+    ports:
+      - "9000:9000"
+
+  worker1:
+    image: bicycle:dev
+    depends_on: [jobmanager]
+    entrypoint: ["/usr/local/bin/worker"]
+    command: ["--jobmanager", "jobmanager:9000"]
+
+  worker2:
+    image: bicycle:dev
+    depends_on: [jobmanager]
+    entrypoint: ["/usr/local/bin/worker"]
+    command: ["--jobmanager", "jobmanager:9000"]
