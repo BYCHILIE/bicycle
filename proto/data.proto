@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package bicycle.data;
+
+// ============================================================================
+// Data Plane Messages - Network transfer between operators
+// ============================================================================
+
+// Envelope for all data plane messages
+message DataMessage {
+    oneof payload {
+        RecordBatch record_batch = 1;
+        Watermark watermark = 2;
+        CheckpointBarrier barrier = 3;
+        EndOfPartition end_of_partition = 4;
+    }
+}
+
+// Batch of records for efficient transfer
+message RecordBatch {
+    int32 channel_index = 1;
+    repeated Record records = 2;
+}
+
+message Record {
+    int64 timestamp = 1;
+    bytes key = 2;
+    bytes value = 3;
+}
+
+message Watermark {
+    int64 timestamp = 1;
+}
+
+message CheckpointBarrier {
+    int64 checkpoint_id = 1;
+    int64 timestamp = 2;
+    CheckpointOptions options = 3;
+}
+
+message CheckpointOptions {
+    bool is_savepoint = 1;
+    bool is_unaligned = 2;  // For unaligned checkpoints (Flink 1.11+)
+    int64 alignment_timeout_ms = 3;
+}
+
+message EndOfPartition {
+    int32 channel_index = 1;
+}
+
+// ============================================================================
+// Network Channel Setup
+// ============================================================================
+
+service DataPlane {
+    // Establish a data channel between operators
+    rpc OpenChannel(OpenChannelRequest) returns (OpenChannelResponse);
+    
+    // Bidirectional streaming for data transfer
+    rpc TransferData(stream DataMessage) returns (stream DataAck);
+    
+    // Credit-based flow control
+    rpc RequestCredit(CreditRequest) returns (CreditResponse);
+}
+
+message OpenChannelRequest {
+    string source_task_id = 1;
+    string target_task_id = 2;
+    int32 channel_index = 3;
+    int32 num_channels = 4;
+}
+
+message OpenChannelResponse {
+    bool success = 1;
+    int32 initial_credit = 2;  // Initial buffer credits
+}
+
+message DataAck {
+    int64 sequence_number = 1;
+    int32 credit = 2;  // Credits returned
+}
+
+message CreditRequest {
+    string channel_id = 1;
+    int32 requested_credit = 2;
+}
+
+message CreditResponse {
+    int32 granted_credit = 1;
+}

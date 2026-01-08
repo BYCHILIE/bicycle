@@ -1,20 +1,106 @@
+version: '3.8'
+
 services:
+  # ==========================================================================
+  # JobManager - Control Plane
+  # ==========================================================================
   jobmanager:
-    build: .
-    image: bicycle:dev
-    entrypoint: ["/usr/local/bin/jobmanager"]
-    command: ["--bind", "0.0.0.0:9000"]
+    build:
+      context: .
+      target: jobmanager
+    container_name: bicycle-jobmanager
+    hostname: jobmanager
     ports:
-      - "9000:9000"
+      - "9000:9000"   # Control plane RPC
+      - "8081:8081"   # Web UI (future)
+    environment:
+      - RUST_LOG=info,bicycle=debug
+      - BICYCLE_STATE_DIR=/var/bicycle/state
+      - BICYCLE_CHECKPOINT_DIR=/var/bicycle/checkpoints
+    volumes:
+      - jobmanager-state:/var/bicycle/state
+      - checkpoints:/var/bicycle/checkpoints
+    networks:
+      - bicycle-net
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
-  worker1:
-    image: bicycle:dev
-    depends_on: [jobmanager]
-    entrypoint: ["/usr/local/bin/worker"]
-    command: ["--jobmanager", "jobmanager:9000"]
+  # ==========================================================================
+  # Workers - Data Plane
+  # ==========================================================================
+  worker-1:
+    build:
+      context: .
+      target: worker
+    container_name: bicycle-worker-1
+    hostname: worker-1
+    ports:
+      - "9001:9001"
+    environment:
+      - RUST_LOG=info,bicycle=debug
+      - BICYCLE_JOBMANAGER=jobmanager:9000
+      - BICYCLE_STATE_DIR=/var/bicycle/state
+      - BICYCLE_WORKER_SLOTS=4
+      - BICYCLE_WORKER_MEMORY_MB=2048
+    volumes:
+      - worker1-state:/var/bicycle/state
+    networks:
+      - bicycle-net
+    depends_on:
+      - jobmanager
 
-  worker2:
-    image: bicycle:dev
-    depends_on: [jobmanager]
-    entrypoint: ["/usr/local/bin/worker"]
-    command: ["--jobmanager", "jobmanager:9000"]
+  worker-2:
+    build:
+      context: .
+      target: worker
+    container_name: bicycle-worker-2
+    hostname: worker-2
+    ports:
+      - "9002:9001"
+    environment:
+      - RUST_LOG=info,bicycle=debug
+      - BICYCLE_JOBMANAGER=jobmanager:9000
+      - BICYCLE_STATE_DIR=/var/bicycle/state
+      - BICYCLE_WORKER_SLOTS=4
+      - BICYCLE_WORKER_MEMORY_MB=2048
+    volumes:
+      - worker2-state:/var/bicycle/state
+    networks:
+      - bicycle-net
+    depends_on:
+      - jobmanager
+
+  # ==========================================================================
+  # Demo Runner (for testing)
+  # ==========================================================================
+  demo:
+    build:
+      context: .
+      target: runtime
+    container_name: bicycle-demo
+    command: ["bin/mini-runner"]
+    environment:
+      - RUST_LOG=info
+    networks:
+      - bicycle-net
+    profiles:
+      - demo
+
+# ==========================================================================
+# Networks
+# ==========================================================================
+networks:
+  bicycle-net:
+    driver: bridge
+
+# ==========================================================================
+# Volumes
+# ==========================================================================
+volumes:
+  jobmanager-state:
+  worker1-state:
+  worker2-state:
+  checkpoints:

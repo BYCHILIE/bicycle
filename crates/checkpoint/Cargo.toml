@@ -1,17 +1,18 @@
 [package]
-name = "bicycle-operators"
+name = "bicycle-checkpoint"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+bicycle-core = { path = "../core" }
+bicycle-state = { path = "../state" }
 anyhow.workspace = true
 async-trait.workspace = true
-bincode.workspace = true
+dashmap.workspace = true
+futures.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
 tracing.workspace = true
-
-bicycle-core = { path = "../core" }
-bicycle-runtime = { path = "../runtime" }
-bicycle-state = { path = "../state" }

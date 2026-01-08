@@ -1,0 +1,302 @@
+syntax = "proto3";
+
+package bicycle.control;
+
+// ============================================================================
+// Control Plane Service - JobManager <-> Worker communication
+// ============================================================================
+
+service ControlPlane {
+    // Worker registration and heartbeats
+    rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+    
+    // Task lifecycle
+    rpc DeployTask(DeployTaskRequest) returns (DeployTaskResponse);
+    rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+    
+    // Checkpoint coordination
+    rpc TriggerCheckpoint(TriggerCheckpointRequest) returns (TriggerCheckpointResponse);
+    rpc AcknowledgeCheckpoint(AckCheckpointRequest) returns (AckCheckpointResponse);
+    
+    // Job management
+    rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+    rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
+    rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+}
+
+// ============================================================================
+// Worker Registration
+// ============================================================================
+
+message RegisterWorkerRequest {
+    string worker_id = 1;
+    string hostname = 2;
+    int32 data_port = 3;
+    int32 available_slots = 4;
+    WorkerResources resources = 5;
+}
+
+message WorkerResources {
+    int64 memory_mb = 1;
+    int32 cpu_cores = 2;
+}
+
+message RegisterWorkerResponse {
+    bool success = 1;
+    string message = 2;
+    int64 heartbeat_interval_ms = 3;
+}
+
+message HeartbeatRequest {
+    string worker_id = 1;
+    repeated TaskStatus task_statuses = 2;
+    WorkerMetrics metrics = 3;
+}
+
+message TaskStatus {
+    string task_id = 1;
+    TaskState state = 2;
+    string error_message = 3;
+    int64 records_processed = 4;
+    int64 bytes_processed = 5;
+}
+
+enum TaskState {
+    TASK_STATE_UNKNOWN = 0;
+    TASK_STATE_CREATED = 1;
+    TASK_STATE_DEPLOYING = 2;
+    TASK_STATE_RUNNING = 3;
+    TASK_STATE_FINISHED = 4;
+    TASK_STATE_FAILED = 5;
+    TASK_STATE_CANCELING = 6;
+    TASK_STATE_CANCELED = 7;
+}
+
+message WorkerMetrics {
+    double cpu_usage = 1;
+    int64 memory_used_mb = 2;
+    int64 network_bytes_in = 3;
+    int64 network_bytes_out = 4;
+}
+
+message HeartbeatResponse {
+    bool success = 1;
+    repeated TaskCommand commands = 2;
+}
+
+message TaskCommand {
+    string task_id = 1;
+    TaskCommandType command = 2;
+}
+
+enum TaskCommandType {
+    TASK_COMMAND_NONE = 0;
+    TASK_COMMAND_CANCEL = 1;
+    TASK_COMMAND_CHECKPOINT = 2;
+}
+
+// ============================================================================
+// Task Deployment
+// ============================================================================
+
+message DeployTaskRequest {
+    string job_id = 1;
+    string task_id = 2;
+    TaskDescriptor task = 3;
+}
+
+message TaskDescriptor {
+    string operator_name = 1;
+    OperatorType operator_type = 2;
+    bytes operator_config = 3;  // Serialized operator configuration
+    int32 parallelism = 4;
+    int32 subtask_index = 5;
+    repeated InputGate input_gates = 6;
+    repeated OutputGate output_gates = 7;
+}
+
+enum OperatorType {
+    OPERATOR_TYPE_UNKNOWN = 0;
+    OPERATOR_TYPE_SOURCE = 1;
+    OPERATOR_TYPE_MAP = 2;
+    OPERATOR_TYPE_FILTER = 3;
+    OPERATOR_TYPE_FLAT_MAP = 4;
+    OPERATOR_TYPE_KEY_BY = 5;
+    OPERATOR_TYPE_WINDOW = 6;
+    OPERATOR_TYPE_JOIN = 7;
+    OPERATOR_TYPE_SINK = 8;
+}
+
+message InputGate {
+    string upstream_task_id = 1;
+    string upstream_worker_host = 2;
+    int32 upstream_worker_port = 3;
+    PartitionStrategy partition_strategy = 4;
+}
+
+message OutputGate {
+    string downstream_task_id = 1;
+    string downstream_worker_host = 2;
+    int32 downstream_worker_port = 3;
+    PartitionStrategy partition_strategy = 4;
+}
+
+enum PartitionStrategy {
+    PARTITION_FORWARD = 0;
+    PARTITION_REBALANCE = 1;
+    PARTITION_HASH = 2;
+    PARTITION_BROADCAST = 3;
+}
+
+message DeployTaskResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message CancelTaskRequest {
+    string task_id = 1;
+}
+
+message CancelTaskResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// ============================================================================
+// Checkpoint Coordination
+// ============================================================================
+
+message TriggerCheckpointRequest {
+    string job_id = 1;
+    int64 checkpoint_id = 2;
+    int64 timestamp = 3;
+    CheckpointType checkpoint_type = 4;
+}
+
+enum CheckpointType {
+    CHECKPOINT_TYPE_CHECKPOINT = 0;
+    CHECKPOINT_TYPE_SAVEPOINT = 1;
+}
+
+message TriggerCheckpointResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message AckCheckpointRequest {
+    string job_id = 1;
+    string task_id = 2;
+    int64 checkpoint_id = 3;
+    CheckpointMetadata metadata = 4;
+}
+
+message CheckpointMetadata {
+    int64 state_size_bytes = 1;
+    int64 duration_ms = 2;
+    string state_handle = 3;  // Reference to persisted state
+}
+
+message AckCheckpointResponse {
+    bool success = 1;
+}
+
+// ============================================================================
+// Job Management
+// ============================================================================
+
+message SubmitJobRequest {
+    string job_name = 1;
+    JobGraph job_graph = 2;
+    JobConfig config = 3;
+}
+
+message JobGraph {
+    repeated JobVertex vertices = 1;
+    repeated JobEdge edges = 2;
+}
+
+message JobVertex {
+    string vertex_id = 1;
+    string name = 2;
+    OperatorType operator_type = 3;
+    bytes operator_config = 4;
+    int32 parallelism = 5;
+}
+
+message JobEdge {
+    string source_vertex_id = 1;
+    string target_vertex_id = 2;
+    PartitionStrategy partition_strategy = 3;
+}
+
+message JobConfig {
+    int64 checkpoint_interval_ms = 1;
+    int32 max_parallelism = 2;
+    RestartStrategy restart_strategy = 3;
+    map<string, string> properties = 4;
+}
+
+message RestartStrategy {
+    RestartStrategyType type = 1;
+    int32 max_attempts = 2;
+    int64 delay_ms = 3;
+}
+
+enum RestartStrategyType {
+    RESTART_STRATEGY_NONE = 0;
+    RESTART_STRATEGY_FIXED_DELAY = 1;
+    RESTART_STRATEGY_EXPONENTIAL_BACKOFF = 2;
+}
+
+message SubmitJobResponse {
+    bool success = 1;
+    string job_id = 2;
+    string message = 3;
+}
+
+message GetJobStatusRequest {
+    string job_id = 1;
+}
+
+message GetJobStatusResponse {
+    string job_id = 1;
+    JobState state = 2;
+    int64 start_time = 3;
+    int64 end_time = 4;
+    repeated TaskStatus task_statuses = 5;
+    JobMetrics metrics = 6;
+}
+
+enum JobState {
+    JOB_STATE_UNKNOWN = 0;
+    JOB_STATE_CREATED = 1;
+    JOB_STATE_RUNNING = 2;
+    JOB_STATE_FAILING = 3;
+    JOB_STATE_FAILED = 4;
+    JOB_STATE_CANCELING = 5;
+    JOB_STATE_CANCELED = 6;
+    JOB_STATE_FINISHED = 7;
+    JOB_STATE_RESTARTING = 8;
+    JOB_STATE_SUSPENDED = 9;
+}
+
+message JobMetrics {
+    int64 records_in = 1;
+    int64 records_out = 2;
+    int64 bytes_in = 3;
+    int64 bytes_out = 4;
+    int64 last_checkpoint_id = 5;
+    int64 last_checkpoint_time = 6;
+}
+
+message CancelJobRequest {
+    string job_id = 1;
+    bool savepoint = 2;  // If true, take a savepoint before canceling
+}
+
+message CancelJobResponse {
+    bool success = 1;
+    string message = 2;
+    string savepoint_path = 3;  // Only set if savepoint was requested
+}
