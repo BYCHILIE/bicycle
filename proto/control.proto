@@ -10,19 +10,25 @@ service ControlPlane {
     // Worker registration and heartbeats
     rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
     rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
-    
+
     // Task lifecycle
     rpc DeployTask(DeployTaskRequest) returns (DeployTaskResponse);
     rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
-    
+
     // Checkpoint coordination
     rpc TriggerCheckpoint(TriggerCheckpointRequest) returns (TriggerCheckpointResponse);
     rpc AcknowledgeCheckpoint(AckCheckpointRequest) returns (AckCheckpointResponse);
-    
+
     // Job management
     rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
     rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
     rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+    rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+
+    // Cluster monitoring
+    rpc GetClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
+    rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+    rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse);
 }
 
 // ============================================================================
@@ -299,4 +305,76 @@ message CancelJobResponse {
     bool success = 1;
     string message = 2;
     string savepoint_path = 3;  // Only set if savepoint was requested
+}
+
+message ListJobsRequest {
+    // Optional filter by state
+    repeated JobState states = 1;
+}
+
+message ListJobsResponse {
+    repeated JobSummary jobs = 1;
+}
+
+message JobSummary {
+    string job_id = 1;
+    string name = 2;
+    JobState state = 3;
+    int64 start_time = 4;
+    int32 tasks_total = 5;
+    int32 tasks_running = 6;
+}
+
+// ============================================================================
+// Cluster Monitoring
+// ============================================================================
+
+message GetClusterInfoRequest {}
+
+message GetClusterInfoResponse {
+    int32 total_workers = 1;
+    int32 active_workers = 2;
+    int32 total_slots = 3;
+    int32 available_slots = 4;
+    int32 running_jobs = 5;
+    int32 total_tasks = 6;
+    int64 uptime_ms = 7;
+}
+
+message ListWorkersRequest {}
+
+message ListWorkersResponse {
+    repeated WorkerSummary workers = 1;
+}
+
+message WorkerSummary {
+    string worker_id = 1;
+    string hostname = 2;
+    int32 slots = 3;
+    int32 slots_used = 4;
+    WorkerState state = 5;
+    int64 last_heartbeat_ms = 6;
+    WorkerMetrics metrics = 7;
+    repeated string running_tasks = 8;
+}
+
+enum WorkerState {
+    WORKER_STATE_UNKNOWN = 0;
+    WORKER_STATE_REGISTERED = 1;
+    WORKER_STATE_ACTIVE = 2;
+    WORKER_STATE_LOST = 3;
+    WORKER_STATE_DECOMMISSIONING = 4;
+}
+
+message GetMetricsRequest {}
+
+message GetMetricsResponse {
+    int64 total_records_processed = 1;
+    int64 total_bytes_processed = 2;
+    int64 checkpoints_completed = 3;
+    int64 checkpoints_failed = 4;
+    int64 uptime_seconds = 5;
+    double throughput_records_per_sec = 6;
+    double throughput_bytes_per_sec = 7;
+    map<string, int64> job_records = 8;  // job_id -> records processed
 }

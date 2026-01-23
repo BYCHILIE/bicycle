@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # ==========================================================================
   # JobManager - Control Plane
@@ -12,7 +10,6 @@ services:
     hostname: jobmanager
     ports:
       - "9000:9000"   # Control plane RPC
-      - "8081:8081"   # Web UI (future)
     environment:
       - RUST_LOG=info,bicycle=debug
       - BICYCLE_STATE_DIR=/var/bicycle/state
@@ -41,10 +38,7 @@ services:
       - "9001:9001"
     environment:
       - RUST_LOG=info,bicycle=debug
-      - BICYCLE_JOBMANAGER=jobmanager:9000
-      - BICYCLE_STATE_DIR=/var/bicycle/state
-      - BICYCLE_WORKER_SLOTS=4
-      - BICYCLE_WORKER_MEMORY_MB=2048
+    command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--slots", "4", "--memory-mb", "2048"]
     volumes:
       - worker1-state:/var/bicycle/state
     networks:
@@ -62,10 +56,7 @@ services:
       - "9002:9001"
     environment:
       - RUST_LOG=info,bicycle=debug
-      - BICYCLE_JOBMANAGER=jobmanager:9000
-      - BICYCLE_STATE_DIR=/var/bicycle/state
-      - BICYCLE_WORKER_SLOTS=4
-      - BICYCLE_WORKER_MEMORY_MB=2048
+    command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--slots", "4", "--memory-mb", "2048"]
     volumes:
       - worker2-state:/var/bicycle/state
     networks:
@@ -74,20 +65,43 @@ services:
       - jobmanager
 
   # ==========================================================================
-  # Demo Runner (for testing)
+  # Demo Client (submits jobs to the cluster)
   # ==========================================================================
   demo:
     build:
       context: .
-      target: runtime
+      target: demo
     container_name: bicycle-demo
-    command: ["bin/mini-runner"]
+    command: ["bin/demo-client", "--jobmanager", "jobmanager:9000", "demo", "--duration", "60"]
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=info,demo_client=debug
     networks:
       - bicycle-net
+    depends_on:
+      - jobmanager
+      - worker-1
+      - worker-2
     profiles:
       - demo
+
+  # ==========================================================================
+  # Web UI
+  # ==========================================================================
+  webui:
+    build:
+      context: .
+      target: webui
+    container_name: bicycle-webui
+    hostname: webui
+    ports:
+      - "8081:8081"   # Web UI HTTP
+    environment:
+      - RUST_LOG=info,bicycle=debug
+    command: ["bin/webui", "--bind", "0.0.0.0:8081", "--jobmanager", "jobmanager:9000"]
+    networks:
+      - bicycle-net
+    depends_on:
+      - jobmanager
 
 # ==========================================================================
 # Networks

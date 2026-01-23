@@ -1,12 +1,19 @@
-//! Minimal runtime for a streaming operator chain.
+//! Runtime for streaming operator execution.
 //!
-//! MVP characteristics:
-//! - single-input, single-output operators
-//! - bounded channels (backpressure)
-//! - watermarks and End are propagated
-//! - checkpoint barriers
+//! This module provides:
+//! - Operator trait and execution framework
+//! - Bounded channels with backpressure
+//! - Watermark and checkpoint barrier propagation
+//! - Exactly-once sink guarantees via transactional sinks
 //!
-//! Next steps (not in MVP): multi-input operators, network channels, barrier alignment.
+//! ## Exactly-Once Semantics
+//!
+//! The runtime supports exactly-once processing through:
+//! - Checkpoint barriers that flow through the dataflow graph
+//! - Transactional sinks that commit on checkpoint completion
+//! - Idempotent write tracking for deduplication
+
+pub mod sink;
 
 use anyhow::Result;
 use async_trait::async_trait;

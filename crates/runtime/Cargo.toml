@@ -9,5 +9,8 @@ anyhow.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+serde.workspace = true
+bincode.workspace = true
+parking_lot.workspace = true
 
 bicycle-core = { path = "../core" }

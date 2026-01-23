@@ -1,0 +1,21 @@
+[package]
+name = "bicycle-connectors"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["kafka"]
+kafka = ["rdkafka"]
+pulsar = []  # Placeholder - needs pulsar crate when enabled
+
+[dependencies]
+bicycle-core = { path = "../core" }
+bicycle-runtime = { path = "../runtime" }
+anyhow.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+rdkafka = { workspace = true, optional = true }
+# pulsar = { version = "6.3", optional = true }  # Uncomment when needed

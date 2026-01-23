@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bicycle Dashboard</title>
+    <style>
+        :root {
+            --primary: #3b82f6;
+            --primary-dark: #2563eb;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text: #1e293b;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .header {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 1.5rem;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .table-container {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .table-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .table-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 0.75rem 1.5rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        tr:hover {
+            background: var(--bg);
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .status-running {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status-failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .status-finished {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .status-created {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-sm {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 2rem;
+            width: 100%;
+            max-width: 500px;
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--text-muted);
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 0.875rem;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .refresh-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .spinner {
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <circle cx="12" cy="12" r="3"></circle>
+                <line x1="12" y1="2" x2="12" y2="4"></line>
+                <line x1="12" y1="20" x2="12" y2="22"></line>
+            </svg>
+            Bicycle Dashboard
+        </h1>
+    </header>
+
+    <div class="container">
+        <!-- Cluster Overview -->
+        <div class="grid">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Workers</span>
+                </div>
+                <div class="stat-value" id="worker-count">-</div>
+                <div class="stat-label">Active workers</div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Available Slots</span>
+                </div>
+                <div class="stat-value" id="slot-count">-</div>
+                <div class="stat-label">Total task slots</div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Running Jobs</span>
+                </div>
+                <div class="stat-value" id="job-count">-</div>
+                <div class="stat-label">Active jobs</div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Records Processed</span>
+                </div>
+                <div class="stat-value" id="records-count">-</div>
+                <div class="stat-label">Total records</div>
+            </div>
+        </div>
+
+        <!-- Workers Table -->
+        <div class="table-container" style="margin-bottom: 2rem;">
+            <div class="table-header">
+                <h2 class="table-title">Workers</h2>
+                <div class="refresh-indicator">
+                    <span id="workers-status">Active</span>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Worker ID</th>
+                        <th>Hostname</th>
+                        <th>Slots</th>
+                        <th>CPU</th>
+                        <th>Memory</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="workers-table-body">
+                    <tr>
+                        <td colspan="6" class="empty-state">Loading workers...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Jobs Table -->
+        <div class="table-container">
+            <div class="table-header">
+                <h2 class="table-title">Jobs</h2>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <div class="refresh-indicator">
+                        <span id="refresh-status">Auto-refresh: 5s</span>
+                    </div>
+                    <button class="btn btn-primary" onclick="openSubmitModal()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        Submit Job
+                    </button>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Job ID</th>
+                        <th>Name</th>
+                        <th>Status</th>
+                        <th>Tasks</th>
+                        <th>Started</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="jobs-table-body">
+                    <tr>
+                        <td colspan="6" class="empty-state">Loading jobs...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Submit Job Modal -->
+    <div class="modal" id="submit-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Submit New Job</h3>
+                <button class="close-btn" onclick="closeSubmitModal()">&times;</button>
+            </div>
+            <form onsubmit="submitJob(event)">
+                <div class="form-group">
+                    <label class="form-label">Job Name</label>
+                    <input type="text" class="form-input" id="job-name" required placeholder="my-streaming-job">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Parallelism</label>
+                    <input type="number" class="form-input" id="job-parallelism" value="1" min="1" max="16">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Checkpoint Interval (ms)</label>
+                    <input type="number" class="form-input" id="checkpoint-interval" value="10000" min="1000">
+                </div>
+                <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1.5rem;">
+                    <button type="button" class="btn" onclick="closeSubmitModal()" style="background: var(--border);">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Submit</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+
+        // Fetch cluster info
+        async function fetchClusterInfo() {
+            try {
+                const response = await fetch(`${API_BASE}/cluster`);
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('worker-count').textContent = data.workers || '0';
+                    document.getElementById('slot-count').textContent = data.available_slots || '0';
+                    document.getElementById('job-count').textContent = data.running_jobs || '0';
+                }
+            } catch (e) {
+                console.error('Failed to fetch cluster info:', e);
+            }
+        }
+
+        // Fetch metrics
+        async function fetchMetrics() {
+            try {
+                const response = await fetch(`${API_BASE}/metrics`);
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('records-count').textContent =
+                        formatNumber(data.total_records_processed || 0);
+                }
+            } catch (e) {
+                console.error('Failed to fetch metrics:', e);
+            }
+        }
+
+        // Fetch workers
+        async function fetchWorkers() {
+            try {
+                const response = await fetch(`${API_BASE}/cluster/workers`);
+                const tbody = document.getElementById('workers-table-body');
+
+                if (response.ok) {
+                    const workers = await response.json();
+
+                    if (workers.length === 0) {
+                        tbody.innerHTML = `
+                            <tr>
+                                <td colspan="6" class="empty-state">No workers registered</td>
+                            </tr>
+                        `;
+                        return;
+                    }
+
+                    tbody.innerHTML = workers.map(worker => `
+                        <tr>
+                            <td><code>${worker.worker_id.substring(0, 8)}...</code></td>
+                            <td>${worker.hostname}</td>
+                            <td>${worker.slots_used}/${worker.slots}</td>
+                            <td>${worker.cpu_usage.toFixed(1)}%</td>
+                            <td>${worker.memory_used_mb} MB</td>
+                            <td><span class="status status-running">Active</span></td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (e) {
+                console.error('Failed to fetch workers:', e);
+            }
+        }
+
+        // Fetch jobs
+        async function fetchJobs() {
+            try {
+                const response = await fetch(`${API_BASE}/jobs`);
+                const tbody = document.getElementById('jobs-table-body');
+
+                if (response.ok) {
+                    const jobs = await response.json();
+
+                    if (jobs.length === 0) {
+                        tbody.innerHTML = `
+                            <tr>
+                                <td colspan="6" class="empty-state">No jobs running</td>
+                            </tr>
+                        `;
+                        return;
+                    }
+
+                    tbody.innerHTML = jobs.map(job => `
+                        <tr>
+                            <td><code>${job.job_id.substring(0, 8)}...</code></td>
+                            <td>${job.name || 'Unnamed'}</td>
+                            <td><span class="status status-${job.state.toLowerCase()}">${job.state}</span></td>
+                            <td>${job.tasks_running || 0}/${job.tasks_total || 0}</td>
+                            <td>${formatTime(job.start_time)}</td>
+                            <td>
+                                <button class="btn btn-danger btn-sm" onclick="cancelJob('${job.job_id}')">
+                                    Cancel
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (e) {
+                console.error('Failed to fetch jobs:', e);
+            }
+        }
+
+        // Submit a new job
+        async function submitJob(event) {
+            event.preventDefault();
+
+            const name = document.getElementById('job-name').value;
+            const parallelism = parseInt(document.getElementById('job-parallelism').value);
+            const checkpointInterval = parseInt(document.getElementById('checkpoint-interval').value);
+
+            try {
+                const response = await fetch(`${API_BASE}/jobs`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        parallelism,
+                        checkpoint_interval_ms: checkpointInterval
+                    })
+                });
+
+                if (response.ok) {
+                    closeSubmitModal();
+                    fetchJobs();
+                    fetchClusterInfo();
+                } else {
+                    alert('Failed to submit job');
+                }
+            } catch (e) {
+                console.error('Failed to submit job:', e);
+                alert('Failed to submit job: ' + e.message);
+            }
+        }
+
+        // Cancel a job
+        async function cancelJob(jobId) {
+            if (!confirm('Are you sure you want to cancel this job?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/jobs/${jobId}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    fetchJobs();
+                    fetchClusterInfo();
+                } else {
+                    alert('Failed to cancel job');
+                }
+            } catch (e) {
+                console.error('Failed to cancel job:', e);
+                alert('Failed to cancel job: ' + e.message);
+            }
+        }
+
+        // Modal functions
+        function openSubmitModal() {
+            document.getElementById('submit-modal').classList.add('active');
+        }
+
+        function closeSubmitModal() {
+            document.getElementById('submit-modal').classList.remove('active');
+            document.getElementById('job-name').value = '';
+        }
+
+        // Utility functions
+        function formatNumber(num) {
+            if (num >= 1000000000) return (num / 1000000000).toFixed(1) + 'B';
+            if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+            return num.toString();
+        }
+
+        function formatTime(timestamp) {
+            if (!timestamp) return '-';
+            const date = new Date(timestamp);
+            return date.toLocaleTimeString();
+        }
+
+        // Initial fetch and auto-refresh
+        function refreshAll() {
+            fetchClusterInfo();
+            fetchMetrics();
+            fetchWorkers();
+            fetchJobs();
+        }
+
+        refreshAll();
+        setInterval(refreshAll, 5000);
+    </script>
+</body>
+</html>
