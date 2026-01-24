@@ -35,10 +35,11 @@ services:
     container_name: bicycle-worker-1
     hostname: worker-1
     ports:
-      - "9001:9001"
+      - "9001:9001"   # Control plane
+      - "9101:9101"   # Data plane
     environment:
       - RUST_LOG=info,bicycle=debug
-    command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--slots", "4", "--memory-mb", "2048"]
+    command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--data-bind", "0.0.0.0:9101", "--slots", "4", "--memory-mb", "2048"]
     volumes:
       - worker1-state:/var/bicycle/state
     networks:
@@ -53,10 +54,11 @@ services:
     container_name: bicycle-worker-2
     hostname: worker-2
     ports:
-      - "9002:9001"
+      - "9002:9001"   # Control plane
+      - "9102:9101"   # Data plane
     environment:
       - RUST_LOG=info,bicycle=debug
-    command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--slots", "4", "--memory-mb", "2048"]
+    command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--data-bind", "0.0.0.0:9101", "--slots", "4", "--memory-mb", "2048"]
     volumes:
       - worker2-state:/var/bicycle/state
     networks:

@@ -24,3 +24,4 @@ uuid.workspace = true
 hostname.workspace = true
 serde.workspace = true
 bincode.workspace = true
+tokio-stream = { workspace = true, features = ["net"] }

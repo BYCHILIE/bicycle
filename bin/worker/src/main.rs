@@ -9,18 +9,22 @@
 
 use anyhow::Result;
 use bicycle_protocol::control::{
-    control_plane_client::ControlPlaneClient, HeartbeatRequest, RegisterWorkerRequest,
-    TaskCommandType, TaskState, TaskStatus, WorkerMetrics, WorkerResources,
+    control_plane_client::ControlPlaneClient, worker_control_server::WorkerControlServer,
+    HeartbeatRequest, RegisterWorkerRequest, TaskCommandType, TaskState, TaskStatus,
+    WorkerMetrics, WorkerResources,
 };
 use clap::Parser;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tonic::transport::Channel;
+use tonic::transport::{Channel, Server};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+mod service;
 mod task_executor;
 
+use service::WorkerControlService;
 use task_executor::TaskExecutor;
 
 /// Bicycle Worker - Task executor and data plane node.
@@ -31,9 +35,13 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:9000")]
     jobmanager: String,
 
-    /// Local bind address for data plane.
+    /// Local bind address for control plane gRPC.
     #[arg(long, default_value = "0.0.0.0:0")]
     bind: String,
+
+    /// Local bind address for data plane network.
+    #[arg(long, default_value = "0.0.0.0:0")]
+    data_bind: String,
 
     /// Number of task slots.
     #[arg(long, default_value = "4")]
@@ -52,17 +60,18 @@ struct Args {
 struct Worker {
     worker_id: String,
     hostname: String,
-    data_port: i32,
+    control_port: i32,
     slots: i32,
     memory_mb: i64,
     client: ControlPlaneClient<Channel>,
     executor: Arc<TaskExecutor>,
     heartbeat_interval: Duration,
+    bind_addr: SocketAddr,
 }
 
 impl Worker {
-    /// Connect to the JobManager and register.
-    async fn connect(args: &Args) -> Result<Self> {
+    /// Connect to the JobManager and create worker instance.
+    async fn connect(args: &Args, bind_addr: SocketAddr) -> Result<Self> {
         let addr = format!("http://{}", args.jobmanager);
         info!(jobmanager = %addr, "Connecting to JobManager");
 
@@ -76,13 +85,8 @@ impl Worker {
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "unknown".to_string());
 
-        // Parse bind address to get port (0 means random)
-        let data_port: i32 = args
-            .bind
-            .split(':')
-            .last()
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(0);
+        // Use the actual bound port
+        let control_port = bind_addr.port() as i32;
 
         // Create executor
         let executor = Arc::new(TaskExecutor::new(
@@ -94,12 +98,13 @@ impl Worker {
         Ok(Self {
             worker_id,
             hostname,
-            data_port,
+            control_port,
             slots: args.slots,
             memory_mb: args.memory_mb,
             client,
             executor,
             heartbeat_interval: Duration::from_secs(5), // Will be updated from registration response
+            bind_addr,
         })
     }
 
@@ -108,7 +113,7 @@ impl Worker {
         let request = RegisterWorkerRequest {
             worker_id: self.worker_id.clone(),
             hostname: self.hostname.clone(),
-            data_port: self.data_port,
+            data_port: self.control_port,
             available_slots: self.slots,
             resources: Some(WorkerResources {
                 memory_mb: self.memory_mb,
@@ -119,6 +124,7 @@ impl Worker {
         info!(
             worker_id = %self.worker_id,
             hostname = %self.hostname,
+            port = self.control_port,
             slots = self.slots,
             "Registering with JobManager"
         );
@@ -250,6 +256,7 @@ async fn main() -> Result<()> {
     info!(
         jobmanager = %args.jobmanager,
         bind = %args.bind,
+        data_bind = %args.data_bind,
         slots = args.slots,
         "Starting Bicycle Worker"
     );
@@ -257,8 +264,19 @@ async fn main() -> Result<()> {
     // Create state directory
     std::fs::create_dir_all(&args.state_dir)?;
 
-    // Connect and register
-    let mut worker = Worker::connect(&args).await?;
+    // Parse and bind the control plane address
+    let bind_addr: SocketAddr = args.bind.parse()?;
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+    let local_addr = listener.local_addr()?;
+    info!(bind_addr = %local_addr, "Worker control service bound");
+
+    // Connect and create worker
+    let mut worker = Worker::connect(&args, local_addr).await?;
+
+    // Start the data plane network
+    let data_bind_addr: SocketAddr = args.data_bind.parse()?;
+    let data_addr = worker.executor.start_network(data_bind_addr).await?;
+    info!(data_addr = %data_addr, "Worker data plane started");
 
     // Retry registration with backoff
     let mut retry_count = 0;
@@ -276,11 +294,45 @@ async fn main() -> Result<()> {
                     "Registration failed, retrying..."
                 );
                 tokio::time::sleep(Duration::from_secs(2_u64.pow(retry_count.min(5)))).await;
-                worker = Worker::connect(&args).await?;
+                worker = Worker::connect(&args, local_addr).await?;
             }
         }
     }
 
+    // Create the gRPC service
+    let control_service = WorkerControlService::new(worker.executor.clone());
+
+    // Run the gRPC server and heartbeat loop concurrently
+    let server_handle = tokio::spawn(async move {
+        info!(addr = %local_addr, "Starting Worker control gRPC server");
+        Server::builder()
+            .add_service(WorkerControlServer::new(control_service))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+    });
+
     // Run heartbeat loop
-    worker.run_heartbeat_loop().await
+    let heartbeat_handle = tokio::spawn(async move {
+        worker.run_heartbeat_loop().await
+    });
+
+    // Wait for either to complete (or fail)
+    tokio::select! {
+        result = server_handle => {
+            match result {
+                Ok(Ok(())) => info!("gRPC server stopped"),
+                Ok(Err(e)) => error!(error = %e, "gRPC server error"),
+                Err(e) => error!(error = %e, "gRPC server task panicked"),
+            }
+        }
+        result = heartbeat_handle => {
+            match result {
+                Ok(Ok(())) => info!("Heartbeat loop stopped"),
+                Ok(Err(e)) => error!(error = %e, "Heartbeat loop error"),
+                Err(e) => error!(error = %e, "Heartbeat loop task panicked"),
+            }
+        }
+    }
+
+    Ok(())
 }

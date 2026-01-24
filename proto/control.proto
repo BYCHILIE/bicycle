@@ -378,3 +378,31 @@ message GetMetricsResponse {
     double throughput_bytes_per_sec = 7;
     map<string, int64> job_records = 8;  // job_id -> records processed
 }
+
+// ============================================================================
+// Worker Control Service - JobManager -> Worker communication
+// Workers expose this service for receiving task deployment commands
+// ============================================================================
+
+service WorkerControl {
+    // Deploy a task to this worker
+    rpc DeployTask(DeployTaskRequest) returns (DeployTaskResponse);
+
+    // Cancel a task on this worker
+    rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+
+    // Trigger checkpoint for a task
+    rpc TriggerTaskCheckpoint(TriggerTaskCheckpointRequest) returns (TriggerTaskCheckpointResponse);
+}
+
+message TriggerTaskCheckpointRequest {
+    string task_id = 1;
+    int64 checkpoint_id = 2;
+    int64 timestamp = 3;
+    CheckpointType checkpoint_type = 4;
+}
+
+message TriggerTaskCheckpointResponse {
+    bool success = 1;
+    string message = 2;
+}

@@ -677,16 +677,16 @@ docker compose --profile demo up demo
 
 ## Roadmap
 
-### Phase 1: Core Completion (Current)
+### Phase 1: Core Completion ✅
 - [x] JobManager with gRPC API
 - [x] Worker registration and heartbeat
 - [x] Task scheduling with slot allocation
 - [x] Web UI dashboard
 - [x] Cluster monitoring and metrics
 - [x] Demo client CLI
-- [ ] **Task deployment to workers** (in progress)
-- [ ] **Actual operator execution on workers**
-- [ ] **Data plane communication between tasks**
+- [x] Task deployment from JobManager to Workers
+- [x] Operator execution on Workers (demo operators)
+- [x] Data plane communication setup (network layer)
 
 ### Phase 2: Production Features
 - [ ] Checkpoint persistence and recovery
@@ -715,10 +715,11 @@ docker compose --profile demo up demo
 ### Contributing
 
 Contributions are welcome! Priority areas:
-1. Task deployment and execution
-2. Data plane implementation
-3. Connector development
-4. Documentation and examples
+1. Full data plane integration (connecting operators via network)
+2. Checkpoint persistence and job recovery
+3. Additional connectors (Kinesis, RabbitMQ, etc.)
+4. SQL support via DataFusion
+5. Documentation and examples
 
 ---
 
