@@ -1,17 +1,18 @@
 //! gRPC service implementation for the JobManager.
 
 use crate::scheduler::Scheduler;
-use crate::state::{JobInfo, JobManagerState, TaskInfo, WorkerInfo};
+use crate::state::{JobInfo, JobManagerState, PhysicalTask, TaskInfo, WorkerInfo};
 use bicycle_checkpoint::{CheckpointConfig, CheckpointCoordinator};
 use bicycle_core::JobId;
 use bicycle_protocol::control::{
-    control_plane_server::ControlPlane, AckCheckpointRequest, AckCheckpointResponse,
-    CancelJobRequest, CancelJobResponse, CancelTaskRequest, CancelTaskResponse,
-    DeployTaskResponse, GetClusterInfoRequest, GetClusterInfoResponse, GetJobStatusRequest,
-    GetJobStatusResponse, GetMetricsRequest, GetMetricsResponse, HeartbeatRequest,
-    HeartbeatResponse, JobMetrics, JobState, JobSummary, ListJobsRequest, ListJobsResponse,
-    ListWorkersRequest, ListWorkersResponse, RegisterWorkerRequest, RegisterWorkerResponse,
-    SubmitJobRequest, SubmitJobResponse, TaskCommand, TaskCommandType, TaskState, TaskStatus,
+    control_plane_server::ControlPlane, worker_control_client::WorkerControlClient,
+    AckCheckpointRequest, AckCheckpointResponse, CancelJobRequest, CancelJobResponse,
+    CancelTaskRequest, CancelTaskResponse, DeployTaskRequest, DeployTaskResponse,
+    GetClusterInfoRequest, GetClusterInfoResponse, GetJobStatusRequest, GetJobStatusResponse,
+    GetMetricsRequest, GetMetricsResponse, HeartbeatRequest, HeartbeatResponse, JobMetrics,
+    JobState, JobSummary, ListJobsRequest, ListJobsResponse, ListWorkersRequest,
+    ListWorkersResponse, RegisterWorkerRequest, RegisterWorkerResponse, SubmitJobRequest,
+    SubmitJobResponse, TaskCommand, TaskCommandType, TaskState, TaskStatus,
     TriggerCheckpointRequest, TriggerCheckpointResponse, WorkerMetrics, WorkerResources,
     WorkerState, WorkerSummary,
 };
@@ -81,6 +82,95 @@ impl ControlPlaneService {
         }
 
         commands
+    }
+
+    /// Deploy tasks to workers.
+    async fn deploy_tasks_to_workers(
+        &self,
+        job_id: &str,
+        physical_tasks: &[PhysicalTask],
+        task_locations: &HashMap<String, String>,
+    ) -> Result<Vec<String>, String> {
+        let mut deployed = Vec::new();
+        let mut errors = Vec::new();
+
+        // Group tasks by worker
+        let mut tasks_by_worker: HashMap<String, Vec<&PhysicalTask>> = HashMap::new();
+        for task in physical_tasks {
+            if let Some(worker_id) = task_locations.get(&task.task_id) {
+                tasks_by_worker
+                    .entry(worker_id.clone())
+                    .or_default()
+                    .push(task);
+            }
+        }
+
+        // Deploy to each worker
+        for (worker_id, tasks) in tasks_by_worker {
+            // Get worker address
+            let worker_addr = if let Some(worker) = self.state.workers.get(&worker_id) {
+                format!("http://{}:{}", worker.hostname, worker.data_port)
+            } else {
+                errors.push(format!("Worker {} not found", worker_id));
+                continue;
+            };
+
+            // Connect to worker
+            let mut client = match WorkerControlClient::connect(worker_addr.clone()).await {
+                Ok(client) => client,
+                Err(e) => {
+                    errors.push(format!(
+                        "Failed to connect to worker {}: {}",
+                        worker_id, e
+                    ));
+                    continue;
+                }
+            };
+
+            // Deploy each task
+            for task in tasks {
+                let request = self.scheduler.create_deploy_request(task, task_locations);
+
+                if let Some(req) = request {
+                    match client.deploy_task(req).await {
+                        Ok(response) => {
+                            let resp = response.into_inner();
+                            if resp.success {
+                                deployed.push(task.task_id.clone());
+                                // Update task state
+                                if let Some(mut task_info) =
+                                    self.state.tasks.get_mut(&task.task_id)
+                                {
+                                    task_info.state = TaskState::Deploying;
+                                }
+                                info!(
+                                    task_id = %task.task_id,
+                                    worker_id = %worker_id,
+                                    "Task deployed successfully"
+                                );
+                            } else {
+                                errors.push(format!(
+                                    "Worker rejected task {}: {}",
+                                    task.task_id, resp.message
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            errors.push(format!(
+                                "Failed to deploy task {}: {}",
+                                task.task_id, e
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(deployed)
+        } else {
+            Err(errors.join("; "))
+        }
     }
 }
 
@@ -290,6 +380,13 @@ impl ControlPlane for ControlPlaneService {
             }));
         }
 
+        // Build task location map
+        let task_locations: HashMap<String, String> = result
+            .scheduled
+            .iter()
+            .cloned()
+            .collect();
+
         // Store job
         let mut job = job_info;
         job.tasks = result.scheduled.iter().map(|(t, _)| t.clone()).collect();
@@ -311,22 +408,42 @@ impl ControlPlane for ControlPlaneService {
             }
         }
 
-        // TODO: Actually deploy tasks to workers via gRPC
+        // Deploy tasks to workers
+        match self
+            .deploy_tasks_to_workers(&job_id, &physical_tasks, &task_locations)
+            .await
+        {
+            Ok(deployed) => {
+                info!(
+                    job_id = %job_id,
+                    tasks = deployed.len(),
+                    "Job submitted and tasks deployed successfully"
+                );
 
-        info!(
-            job_id = %job_id,
-            tasks = result.scheduled.len(),
-            "Job submitted successfully"
-        );
+                Ok(Response::new(SubmitJobResponse {
+                    success: true,
+                    job_id,
+                    message: format!(
+                        "Job submitted with {} tasks deployed",
+                        deployed.len()
+                    ),
+                }))
+            }
+            Err(e) => {
+                error!(job_id = %job_id, error = %e, "Failed to deploy some tasks");
 
-        Ok(Response::new(SubmitJobResponse {
-            success: true,
-            job_id,
-            message: format!(
-                "Job submitted with {} tasks",
-                result.scheduled.len()
-            ),
-        }))
+                // Job is partially deployed - still return success but with warning
+                Ok(Response::new(SubmitJobResponse {
+                    success: true,
+                    job_id,
+                    message: format!(
+                        "Job submitted with {} tasks scheduled, deployment issues: {}",
+                        result.scheduled.len(),
+                        e
+                    ),
+                }))
+            }
+        }
     }
 
     /// Get job status.
