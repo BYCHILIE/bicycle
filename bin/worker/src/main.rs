@@ -164,6 +164,7 @@ impl Worker {
                     error_message: error.unwrap_or_default(),
                     records_processed: records,
                     bytes_processed: bytes,
+                    operator_name: String::new(),
                 })
                 .collect();
 

@@ -475,18 +475,31 @@ impl ControlPlane for ControlPlaneService {
             .get(&req.job_id)
             .ok_or_else(|| Status::not_found("Job not found"))?;
 
+        // Build vertex_id -> vertex_name map from job graph
+        let vertex_names: std::collections::HashMap<String, String> = job
+            .graph
+            .vertices
+            .iter()
+            .map(|v| (v.vertex_id.clone(), v.name.clone()))
+            .collect();
+
         // Collect task statuses
         let task_statuses: Vec<TaskStatus> = job
             .tasks
             .iter()
             .filter_map(|task_id| {
                 let task = self.state.tasks.get(task_id)?;
+                let operator_name = vertex_names
+                    .get(&task.vertex_id)
+                    .cloned()
+                    .unwrap_or_default();
                 Some(TaskStatus {
                     task_id: task.task_id.clone(),
                     state: task.state as i32,
                     error_message: task.error_message.clone().unwrap_or_default(),
                     records_processed: task.records_processed,
                     bytes_processed: task.bytes_processed,
+                    operator_name,
                 })
             })
             .collect();

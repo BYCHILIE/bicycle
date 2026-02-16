@@ -68,19 +68,19 @@ fn print_table(jobs: &[bicycle_protocol::control::JobSummary]) {
     println!("Jobs ({})", jobs.len());
     println!("{}", "=".repeat(95));
     println!(
-        "{:<36} {:<20} {:<12} {:<12} {:<12}",
-        "ID", "Name", "State", "Tasks", "Running"
+        "{:<25} {:<12} {:<12} {:<12} {}",
+        "Name", "State", "Tasks", "Running", "ID"
     );
     println!("{}", "-".repeat(95));
 
     for j in jobs {
         println!(
-            "{:<36} {:<20} {:<12} {:<12} {:<12}",
-            &j.job_id[..j.job_id.len().min(36)],
-            &j.name[..j.name.len().min(20)],
+            "{:<25} {:<12} {:<12} {:<12} {}",
+            &j.name[..j.name.len().min(25)],
             state_to_string(j.state),
             j.tasks_total,
-            j.tasks_running
+            j.tasks_running,
+            &j.job_id,
         );
     }
 }

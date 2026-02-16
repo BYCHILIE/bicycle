@@ -8,9 +8,23 @@
 
 // Core traits
 pub use crate::function::{
-    AggregateFunction, AsyncFunction, FilterFunction, FlatMapFunction, KeySelector, MapFunction,
-    ReduceFunction, RichAsyncFunction,
+    AggregateFunction, AsyncFunction, AsyncIOFunction, CoMapFunction, CoProcessFunction,
+    FilterFunction, FlatMapFunction, JoinFunction, KeySelector, KeyedProcessFunction,
+    MapFunction, ProcessFunction, ReduceFunction, RichAsyncFunction,
 };
+
+// Context types for process functions
+pub use crate::function::{
+    KeyedOnTimerContext, KeyedProcessContext, OnTimerContext, ProcessContext, TimerService,
+};
+
+// Serialization schemas
+pub use crate::function::{
+    DeserializationSchema, JsonSchema, SerializationSchema, StringSchema,
+};
+
+// Kafka builders
+pub use crate::kafka::{DeliveryGuarantee, KafkaSinkBuilder, KafkaSourceBuilder};
 
 // Context types
 pub use crate::context::{Context, MemoryStateBackend, RuntimeContext, StateBackend, StateBackendExt, TaskInfo};
@@ -19,15 +33,15 @@ pub use crate::context::{Context, MemoryStateBackend, RuntimeContext, StateBacke
 pub use crate::state::{ListState, MapState, ValueState};
 
 // Stream types
-pub use crate::datastream::{DataStream, KeyedStream, SinkStream, WindowedStream};
+pub use crate::datastream::{ConnectedStreams, DataStream, JoinedStreams, KeyedStream, SinkStream, WindowedStream};
 
 // Environment
 pub use crate::environment::{StreamEnvBuilder, StreamEnvironment};
 
 // Graph types (for advanced use)
 pub use crate::graph::{
-    ConnectorConfig, ConnectorType, Edge, JobConfig, JobGraph, OperatorType, PartitionStrategy,
-    Vertex, WindowType,
+    AsyncProcessConfig, ConnectorConfig, ConnectorType, Edge, JobConfig, JobGraph, OperatorType,
+    PartitionStrategy, Vertex, WindowType,
 };
 
 // Optimizer types

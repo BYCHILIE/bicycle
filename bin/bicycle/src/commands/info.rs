@@ -74,9 +74,12 @@ fn task_state_to_string(state: i32) -> &'static str {
 }
 
 fn print_table(job: &bicycle_protocol::control::GetJobStatusResponse) {
-    println!("Job: {}", job.job_id);
+    let name = if job.job_name.is_empty() { &job.job_id } else { &job.job_name };
+    println!("Job: {}", name);
     println!("{}", "=".repeat(60));
     println!();
+    println!("Name:            {}", name);
+    println!("ID:              {}", job.job_id);
     println!("State:           {}", state_to_string(job.state));
     println!("Start Time:      {}ms ago", job.start_time);
     if job.end_time > 0 {
@@ -97,19 +100,25 @@ fn print_table(job: &bicycle_protocol::control::GetJobStatusResponse) {
     if !job.task_statuses.is_empty() {
         println!();
         println!("Tasks ({})", job.task_statuses.len());
-        println!("{}", "-".repeat(60));
+        println!("{}", "-".repeat(80));
         println!(
-            "{:<30} {:<12} {:<10} {:<10}",
-            "Task ID", "State", "Records", "Bytes"
+            "{:<25} {:<12} {:<10} {:<10} {}",
+            "Operator", "State", "Records", "Bytes", "Task ID"
         );
 
         for task in &job.task_statuses {
+            let display_name = if task.operator_name.is_empty() {
+                &task.task_id
+            } else {
+                &task.operator_name
+            };
             println!(
-                "{:<30} {:<12} {:<10} {:<10}",
-                &task.task_id[..task.task_id.len().min(30)],
+                "{:<25} {:<12} {:<10} {:<10} {}",
+                &display_name[..display_name.len().min(25)],
                 task_state_to_string(task.state),
                 task.records_processed,
-                task.bytes_processed
+                task.bytes_processed,
+                &task.task_id,
             );
             if !task.error_message.is_empty() {
                 println!("  Error: {}", task.error_message);
@@ -121,6 +130,7 @@ fn print_table(job: &bicycle_protocol::control::GetJobStatusResponse) {
 fn print_json(job: &bicycle_protocol::control::GetJobStatusResponse) -> Result<()> {
     let json = serde_json::json!({
         "job_id": job.job_id,
+        "name": job.job_name,
         "state": state_to_string(job.state),
         "start_time": job.start_time,
         "end_time": job.end_time,
@@ -134,6 +144,7 @@ fn print_json(job: &bicycle_protocol::control::GetJobStatusResponse) -> Result<(
         })),
         "tasks": job.task_statuses.iter().map(|t| serde_json::json!({
             "task_id": t.task_id,
+            "operator_name": t.operator_name,
             "state": task_state_to_string(t.state),
             "records_processed": t.records_processed,
             "bytes_processed": t.bytes_processed,

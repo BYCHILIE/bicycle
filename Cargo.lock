@@ -2361,12 +2361,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
 
 [[package]]
-name = "wordcount"
+name = "wordcount-kafka"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bicycle-api",
- "clap",
+ "bicycle-plugin",
  "serde",
  "serde_json",
  "tokio",
@@ -2418,6 +2418,7 @@ dependencies = [
  "hostname",
  "libloading",
  "parking_lot",
+ "rdkafka",
  "serde",
  "serde_json",
  "tokio",

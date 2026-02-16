@@ -86,6 +86,9 @@ pub struct Vertex {
     pub operator_type: OperatorType,
     /// Parallelism (number of parallel instances).
     pub parallelism: u32,
+    /// Whether parallelism was explicitly set by the user.
+    #[serde(skip)]
+    pub parallelism_set: bool,
     /// Maximum parallelism for this operator (for rescaling).
     /// If None, uses the job-level max_parallelism.
     pub max_parallelism: Option<u32>,
@@ -109,6 +112,7 @@ impl Vertex {
             name: name.into(),
             operator_type,
             parallelism: 1,
+            parallelism_set: false,
             max_parallelism: None,
             slot_sharing_group: "default".to_string(),
             chaining_enabled: true,
@@ -200,6 +204,29 @@ pub enum OperatorType {
     },
     /// Count operator - counts elements.
     Count,
+    /// Union operator - merge multiple same-typed streams.
+    Union,
+    /// Connect operator - combine two differently-typed streams.
+    Connect,
+    /// CoProcess operator - processing on connected streams.
+    CoProcess {
+        /// Whether this uses a rich (stateful) co-process function.
+        is_rich: bool,
+    },
+    /// SideOutput operator - tagged output splitting.
+    SideOutput {
+        /// Output tag identifier.
+        tag: String,
+    },
+    /// AsyncIO operator - async external I/O calls (DB lookups, REST, etc.).
+    AsyncIO {
+        /// Whether results should maintain input order.
+        ordered: bool,
+        /// Timeout in milliseconds for async calls.
+        timeout_ms: u64,
+        /// Maximum number of concurrent async requests.
+        capacity: usize,
+    },
 }
 
 /// Connector configuration for sources and sinks.
@@ -266,6 +293,20 @@ pub enum WindowType {
     Session { gap_ms: u64 },
     /// Count-based window.
     Count { count: u64 },
+}
+
+/// Configuration for ordered/unordered async processing.
+///
+/// Controls whether async results preserve input order, the timeout for
+/// async operations, and the maximum number of concurrent async requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AsyncProcessConfig {
+    /// Whether results should maintain input order.
+    pub ordered: bool,
+    /// Timeout in milliseconds for async processing.
+    pub timeout_ms: u64,
+    /// Maximum number of concurrent async requests.
+    pub capacity: usize,
 }
 
 /// An edge (data channel) in the job graph.

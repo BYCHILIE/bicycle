@@ -119,8 +119,12 @@ export function JobOverview({ jobId }: JobOverviewProps) {
         <CardContent>
           <dl className="grid grid-cols-2 gap-4 text-sm">
             <div>
+              <dt className="text-muted-foreground">Name</dt>
+              <dd className="font-medium">{job.name}</dd>
+            </div>
+            <div>
               <dt className="text-muted-foreground">Job ID</dt>
-              <dd className="font-mono break-all">{job.job_id}</dd>
+              <dd className="font-mono break-all text-muted-foreground">{job.job_id}</dd>
             </div>
             <div>
               <dt className="text-muted-foreground">End Time</dt>

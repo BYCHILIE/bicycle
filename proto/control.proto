@@ -66,6 +66,7 @@ message TaskStatus {
     string error_message = 3;
     int64 records_processed = 4;
     int64 bytes_processed = 5;
+    string operator_name = 6;
 }
 
 enum TaskState {
@@ -147,6 +148,16 @@ enum OperatorType {
     OPERATOR_TYPE_COUNT = 10;
     // Process operator using WASM function (like Flink's ProcessFunction)
     OPERATOR_TYPE_PROCESS = 11;
+    // Union operator - merge multiple same-typed streams
+    OPERATOR_TYPE_UNION = 12;
+    // Connect operator - combine two differently-typed streams
+    OPERATOR_TYPE_CONNECT = 13;
+    // CoProcess operator - processing on connected streams
+    OPERATOR_TYPE_CO_PROCESS = 14;
+    // SideOutput operator - tagged output splitting
+    OPERATOR_TYPE_SIDE_OUTPUT = 15;
+    // AsyncIO operator - async external I/O calls
+    OPERATOR_TYPE_ASYNC_IO = 16;
 }
 
 message InputGate {
@@ -258,6 +269,8 @@ message JobVertex {
     string plugin_function = 7;
     // Whether this is a rich function (stateful, with checkpointing)
     bool is_rich_function = 8;
+    // User-defined UID for state recovery (stable across restarts)
+    string uid = 9;
 }
 
 // Connector configuration for sources and sinks

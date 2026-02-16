@@ -3,6 +3,7 @@
 import { useParams, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { useJob } from '@/lib/hooks/useApi'
 
 const tabs = [
   { href: '', label: 'Overview' },
@@ -17,12 +18,13 @@ export default function JobLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const jobId = params.jobId as string
   const basePath = `/jobs/${jobId}`
+  const { data: job } = useJob(jobId)
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Job Details</h1>
-        <p className="text-muted-foreground font-mono">{jobId}</p>
+        <h1 className="text-3xl font-bold">{job?.name || 'Job Details'}</h1>
+        <p className="text-sm text-muted-foreground font-mono">{jobId}</p>
       </div>
 
       <nav className="flex gap-1 border-b">

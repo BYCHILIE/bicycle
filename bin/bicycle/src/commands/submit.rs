@@ -58,6 +58,11 @@ pub enum ApiOperatorType {
     Window { Window: ApiWindowOp },
     Count,
     Reduce,
+    Union,
+    Connect,
+    CoProcess { CoProcess: ApiCoProcessOp },
+    SideOutput { SideOutput: ApiSideOutputOp },
+    AsyncIO { AsyncIO: ApiAsyncIOOp },
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +88,23 @@ pub struct ApiKeyByOp {
 #[derive(Debug, Deserialize)]
 pub struct ApiWindowOp {
     pub window_type: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiCoProcessOp {
+    pub is_rich: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiSideOutputOp {
+    pub tag: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiAsyncIOOp {
+    pub ordered: bool,
+    pub timeout_ms: u64,
+    pub capacity: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,7 +162,12 @@ fn operator_type_to_proto(op: &ApiOperatorType) -> i32 {
         ApiOperatorType::Reduce => 7,
         ApiOperatorType::Sink { .. } => 8,
         ApiOperatorType::Count => 10,
-        ApiOperatorType::Process { .. } => 11, // Process operator
+        ApiOperatorType::Process { .. } => 11,
+        ApiOperatorType::Union => 12,
+        ApiOperatorType::Connect => 13,
+        ApiOperatorType::CoProcess { .. } => 14,
+        ApiOperatorType::SideOutput { .. } => 15,
+        ApiOperatorType::AsyncIO { .. } => 16,
     }
 }
 
@@ -199,6 +226,7 @@ fn to_proto_job_graph(api: &ApiJobGraph) -> JobGraph {
             connector_config,
             plugin_function,
             is_rich_function,
+            uid: v.uid.clone().unwrap_or_default(),
         }
     }).collect();
 
@@ -316,10 +344,10 @@ pub async fn execute(
     let resp = response.into_inner();
 
     if resp.success {
-        println!("Job submitted successfully!");
+        println!("Job '{}' submitted successfully!", job_name);
         println!();
-        println!("  Job ID: {}", resp.job_id);
-        println!("  Name:   {}", job_name);
+        println!("  Name: {}", job_name);
+        println!("  ID:   {}", resp.job_id);
         println!();
 
         // Print connector info

@@ -19,8 +19,8 @@ members = [
   "bin/bicycle",
   "bin/socket-test",
   "bin/wordcount-socket",
-  "test-jobs/wordcount",
   "jobs/wordcount-plugin",
+  "jobs/wordcount-kafka",
 ]
 
 [workspace.package]

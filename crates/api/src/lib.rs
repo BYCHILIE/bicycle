@@ -35,14 +35,25 @@ pub mod datastream;
 pub mod environment;
 pub mod function;
 pub mod graph;
+pub mod kafka;
 pub mod optimizer;
 pub mod prelude;
 pub mod state;
 
 pub use context::{Context, RuntimeContext, TaskInfo};
-pub use datastream::DataStream;
+pub use datastream::{ConnectedStreams, DataStream, JoinedStreams};
 pub use environment::StreamEnvironment;
-pub use function::{AsyncFunction, RichAsyncFunction};
+pub use function::{
+    AsyncFunction, AsyncIOFunction, CoMapFunction, CoProcessFunction, JoinFunction,
+    KeyedProcessFunction, ProcessFunction, RichAsyncFunction,
+};
+pub use function::{
+    DeserializationSchema, JsonSchema, SerializationSchema, StringSchema,
+};
+pub use function::{
+    KeyedOnTimerContext, KeyedProcessContext, OnTimerContext, ProcessContext, TimerService,
+};
+pub use kafka::{DeliveryGuarantee, KafkaSinkBuilder, KafkaSourceBuilder};
 pub use optimizer::{JobGraphOptimizer, OptimizedJobGraph, OperatorChain, OptimizerConfig};
 pub use state::{ListState, MapState, ValueState};
 

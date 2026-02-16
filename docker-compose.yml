@@ -28,43 +28,22 @@ services:
   # ==========================================================================
   # Workers - Data Plane
   # ==========================================================================
-  worker-1:
+  worker:
     build:
       context: .
       target: worker
-    container_name: bicycle-worker-1
-    hostname: worker-1
+    container_name: bicycle-worker
+    hostname: worker
     ports:
       - "9001:9001"   # Control plane
       - "9101:9101"   # Data plane
-      - "9999:9999"   # Socket job input (if job lands on worker-1)
-      - "9998:9998"   # Socket job output (if job lands on worker-1)
+      - "9999:9999"   # Socket job input
+      - "9998:9998"   # Socket job output
     environment:
       - RUST_LOG=info,bicycle=debug
-    command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--data-bind", "0.0.0.0:9101", "--slots", "4", "--memory-mb", "2048"]
+    command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--data-bind", "0.0.0.0:9101", "--slots", "24", "--memory-mb", "4096"]
     volumes:
-      - worker1-state:/var/bicycle/state
-    networks:
-      - bicycle-net
-    depends_on:
-      - jobmanager
-
-  worker-2:
-    build:
-      context: .
-      target: worker
-    container_name: bicycle-worker-2
-    hostname: worker-2
-    ports:
-      - "9002:9001"   # Control plane
-      - "9102:9101"   # Data plane
-      - "19999:9999"  # Socket job input (if job lands on worker-2)
-      - "19998:9998"  # Socket job output (if job lands on worker-2)
-    environment:
-      - RUST_LOG=info,bicycle=debug
-    command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--data-bind", "0.0.0.0:9101", "--slots", "4", "--memory-mb", "2048"]
-    volumes:
-      - worker2-state:/var/bicycle/state
+      - worker-state:/var/bicycle/state
     networks:
       - bicycle-net
     depends_on:
@@ -81,6 +60,7 @@ services:
     environment:
       - RUST_LOG=warn
       - BICYCLE_JOBMANAGER=jobmanager:9000
+      - KAFKA_BROKERS=kafka:9092
     volumes:
       - ./jobs:/opt/bicycle/jobs:ro
     networks:
@@ -139,6 +119,93 @@ services:
     #        nc localhost 7998 (receive output)
 
   # ==========================================================================
+  # Kafka (KRaft mode, no Zookeeper)
+  # ==========================================================================
+  kafka:
+    image: apache/kafka:4.0.0
+    container_name: bicycle-kafka
+    hostname: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: local-dev-kafka-cluster-01
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - bicycle-net
+    profiles:
+      - kafka
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ==========================================================================
+  # Kafka UI (optional monitoring)
+  # ==========================================================================
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: bicycle-kafka-ui
+    ports:
+      - "8085:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: bicycle
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    networks:
+      - bicycle-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    profiles:
+      - kafka
+
+  # ==========================================================================
+  # Word Count Kafka Job (submit to cluster with Kafka pipeline)
+  # ==========================================================================
+  wordcount-kafka:
+    build:
+      context: .
+      target: wordcount-kafka
+    container_name: bicycle-wordcount-kafka
+    hostname: wordcount-kafka
+    env_file:
+      - jobs/wordcount-kafka/.env
+    environment:
+      - KAFKA_BROKERS=kafka:9092
+    networks:
+      - bicycle-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+      jobmanager:
+        condition: service_healthy
+    profiles:
+      - kafka
+    # Usage:
+    #   1. Start cluster + kafka: docker compose --profile kafka up -d
+    #   2. Create topics:         ./jobs/docker/create_topics.sh kafka:9092
+    #   3. Submit the job:
+    #      docker compose --profile cli run cli submit bin/wordcount-kafka --plugin lib/libwordcount_kafka.so
+    #   4. Send input:            nc localhost 9999
+    #   5. Receive output:        nc localhost 9998
+
+  # ==========================================================================
   # API Backend (Rust REST API that talks to JobManager via gRPC)
   # ==========================================================================
   api:
@@ -185,6 +252,6 @@ networks:
 # ==========================================================================
 volumes:
   jobmanager-state:
-  worker1-state:
-  worker2-state:
+  worker-state:
   checkpoints:
+  kafka-data:

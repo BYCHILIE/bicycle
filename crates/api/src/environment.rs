@@ -4,6 +4,7 @@
 
 use crate::datastream::{DataStream, StreamEnvInner};
 use crate::graph::{ConnectorConfig, Edge, JobConfig, JobGraph, OperatorType, Vertex};
+use crate::kafka::KafkaSourceBuilder;
 use crate::Result;
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
@@ -83,6 +84,33 @@ impl StreamEnvironment {
         DataStream::new(self.inner.clone(), vertex_id)
     }
 
+    /// Create a typed source from a Kafka source builder.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let stream: DataStream<MyEvent> = env.add_source(
+    ///     KafkaSourceBuilder::<MyEvent>::new("localhost:9092", "events")
+    ///         .group_id("my-group")
+    ///         .starting_offsets("earliest")
+    /// );
+    /// ```
+    pub fn add_source<T>(&self, builder: KafkaSourceBuilder<T>) -> DataStream<T>
+    where
+        T: Serialize + DeserializeOwned + Send + Sync + 'static,
+    {
+        let vertex_id = self.inner.next_vertex_id();
+        let connector = builder.build_connector();
+        let vertex = Vertex::new(
+            &vertex_id,
+            "KafkaSource",
+            OperatorType::Source { connector },
+        );
+
+        self.inner.add_vertex(vertex);
+        DataStream::new(self.inner.clone(), vertex_id)
+    }
+
     /// Create a generator source for testing.
     pub fn generator_source(&self, rate_ms: u64) -> DataStream<String> {
         let vertex_id = self.inner.next_vertex_id();
@@ -147,8 +175,7 @@ impl StreamEnvironment {
         // Get vertices and apply default parallelism to those that haven't been explicitly set
         let mut vertices = self.inner.get_vertices();
         for vertex in &mut vertices {
-            if vertex.parallelism == 1 && self.config.parallelism > 1 {
-                // Apply default parallelism if vertex is using the default (1)
+            if !vertex.parallelism_set && self.config.parallelism > 1 {
                 vertex.parallelism = self.config.parallelism;
             }
         }

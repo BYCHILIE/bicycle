@@ -158,6 +158,7 @@ fn to_job_graph(def: &JobDefinition, parallelism_override: Option<i32>) -> JobGr
             connector_config,
             plugin_function,
             is_rich_function: is_process, // Process operators may be stateful
+            uid: String::new(),
         }
     }).collect();
 

@@ -54,6 +54,8 @@ pub struct TaskStatus {
     pub records_processed: i64,
     #[prost(int64, tag = "5")]
     pub bytes_processed: i64,
+    #[prost(string, tag = "6")]
+    pub operator_name: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -276,6 +278,9 @@ pub struct JobVertex {
     /// Whether this is a rich function (stateful, with checkpointing)
     #[prost(bool, tag = "8")]
     pub is_rich_function: bool,
+    /// User-defined UID for state recovery (stable across restarts)
+    #[prost(string, tag = "9")]
+    pub uid: ::prost::alloc::string::String,
 }
 /// Connector configuration for sources and sinks
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -611,6 +616,16 @@ pub enum OperatorType {
     Count = 10,
     /// Process operator using WASM function (like Flink's ProcessFunction)
     Process = 11,
+    /// Union operator - merge multiple same-typed streams
+    Union = 12,
+    /// Connect operator - combine two differently-typed streams
+    Connect = 13,
+    /// CoProcess operator - processing on connected streams
+    CoProcess = 14,
+    /// SideOutput operator - tagged output splitting
+    SideOutput = 15,
+    /// AsyncIO operator - async external I/O calls
+    AsyncIo = 16,
 }
 impl OperatorType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -631,6 +646,11 @@ impl OperatorType {
             OperatorType::Reduce => "OPERATOR_TYPE_REDUCE",
             OperatorType::Count => "OPERATOR_TYPE_COUNT",
             OperatorType::Process => "OPERATOR_TYPE_PROCESS",
+            OperatorType::Union => "OPERATOR_TYPE_UNION",
+            OperatorType::Connect => "OPERATOR_TYPE_CONNECT",
+            OperatorType::CoProcess => "OPERATOR_TYPE_CO_PROCESS",
+            OperatorType::SideOutput => "OPERATOR_TYPE_SIDE_OUTPUT",
+            OperatorType::AsyncIo => "OPERATOR_TYPE_ASYNC_IO",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -648,6 +668,11 @@ impl OperatorType {
             "OPERATOR_TYPE_REDUCE" => Some(Self::Reduce),
             "OPERATOR_TYPE_COUNT" => Some(Self::Count),
             "OPERATOR_TYPE_PROCESS" => Some(Self::Process),
+            "OPERATOR_TYPE_UNION" => Some(Self::Union),
+            "OPERATOR_TYPE_CONNECT" => Some(Self::Connect),
+            "OPERATOR_TYPE_CO_PROCESS" => Some(Self::CoProcess),
+            "OPERATOR_TYPE_SIDE_OUTPUT" => Some(Self::SideOutput),
+            "OPERATOR_TYPE_ASYNC_IO" => Some(Self::AsyncIo),
             _ => None,
         }
     }

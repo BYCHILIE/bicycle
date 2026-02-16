@@ -119,6 +119,11 @@ impl KafkaSource {
         Ok(())
     }
 
+    /// Take ownership of the underlying consumer for direct use.
+    pub fn take_consumer(&mut self) -> Option<StreamConsumer> {
+        self.consumer.take()
+    }
+
     /// Run the source, emitting events to the downstream.
     pub async fn run<K, V>(
         &mut self,
@@ -152,8 +157,9 @@ impl KafkaSource {
                                 .as_millis() as u64
                         });
 
-                    // Deserialize key and value
-                    let key = message.key().and_then(&key_deserializer);
+                    // Deserialize key and value; messages without keys use empty bytes
+                    let key_bytes = message.key().unwrap_or(b"");
+                    let key = key_deserializer(key_bytes);
                     let value = message.payload().and_then(&value_deserializer);
 
                     if let (Some(key), Some(value)) = (key, value) {

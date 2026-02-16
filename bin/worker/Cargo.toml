@@ -11,7 +11,7 @@ bicycle-runtime = { path = "../../crates/runtime" }
 bicycle-network = { path = "../../crates/network" }
 bicycle-state = { path = "../../crates/state" }
 bicycle-operators = { path = "../../crates/operators" }
-bicycle-connectors = { path = "../../crates/connectors", features = ["socket"] }
+bicycle-connectors = { path = "../../crates/connectors", features = ["socket", "kafka"] }
 anyhow.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
@@ -29,3 +29,4 @@ serde_json.workspace = true
 bincode.workspace = true
 tokio-stream = { workspace = true, features = ["net"] }
 libloading = "0.8"
+rdkafka.workspace = true

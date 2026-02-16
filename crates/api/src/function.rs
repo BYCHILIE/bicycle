@@ -40,20 +40,14 @@ pub trait AsyncFunction: Send + Sync + 'static {
     type Out: Serialize + DeserializeOwned + Send + Sync + 'static;
 
     /// Process a single input element and produce zero or more outputs.
-    ///
-    /// This method is called for each element in the input stream.
     async fn process(&mut self, input: Self::In, ctx: &Context) -> Vec<Self::Out>;
 
     /// Called once when the operator starts.
-    ///
-    /// Override this to perform initialization logic.
     async fn open(&mut self, _ctx: &Context) -> Result<()> {
         Ok(())
     }
 
     /// Called once when the operator closes.
-    ///
-    /// Override this to perform cleanup logic.
     async fn close(&mut self) -> Result<()> {
         Ok(())
     }
@@ -61,6 +55,11 @@ pub trait AsyncFunction: Send + Sync + 'static {
     /// Returns the name of this function for debugging/logging.
     fn name(&self) -> &str {
         std::any::type_name::<Self>()
+    }
+
+    /// Create a new instance. Available on any type that derives Default.
+    fn new() -> Self where Self: Default {
+        Self::default()
     }
 }
 
@@ -145,6 +144,11 @@ pub trait RichAsyncFunction: Send + Sync + 'static {
     /// Returns the name of this function for debugging/logging.
     fn name(&self) -> &str {
         std::any::type_name::<Self>()
+    }
+
+    /// Create a new instance. Available on any type that derives Default.
+    fn new() -> Self where Self: Default {
+        Self::default()
     }
 }
 
@@ -265,6 +269,303 @@ impl<F: FilterFunction> AsyncFunction for FilterFunctionAdapter<F> {
 
 /// Adapter to use FilterFunction as AsyncFunction.
 pub struct FilterFunctionAdapter<F>(pub F);
+
+// ============================================================================
+// Process Functions (like Flink's ProcessFunction hierarchy)
+// ============================================================================
+
+/// Context for process functions providing timestamp and side output capabilities.
+pub struct ProcessContext {
+    /// Current element timestamp (event time).
+    pub timestamp: Option<i64>,
+    /// Timer service for registering timers.
+    pub timer_service: TimerService,
+    side_outputs: std::sync::Mutex<Vec<(String, Vec<u8>)>>,
+}
+
+impl ProcessContext {
+    pub fn new() -> Self {
+        Self {
+            timestamp: None,
+            timer_service: TimerService::new(),
+            side_outputs: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Emit a value to a side output identified by the given tag.
+    pub fn side_output<T: Serialize>(&self, tag: &str, value: &T) {
+        if let Ok(bytes) = serde_json::to_vec(value) {
+            self.side_outputs.lock().unwrap().push((tag.to_string(), bytes));
+        }
+    }
+
+    /// Drain collected side outputs.
+    pub fn take_side_outputs(&self) -> Vec<(String, Vec<u8>)> {
+        std::mem::take(&mut *self.side_outputs.lock().unwrap())
+    }
+}
+
+/// Keyed process context extending ProcessContext with current key access.
+pub struct KeyedProcessContext<K> {
+    /// The base process context.
+    pub ctx: ProcessContext,
+    /// The current key being processed.
+    pub current_key: K,
+}
+
+impl<K> KeyedProcessContext<K> {
+    pub fn new(key: K) -> Self {
+        Self {
+            ctx: ProcessContext::new(),
+            current_key: key,
+        }
+    }
+}
+
+/// Timer service for registering event-time and processing-time timers.
+pub struct TimerService {
+    event_time_timers: std::sync::Mutex<Vec<i64>>,
+    processing_time_timers: std::sync::Mutex<Vec<i64>>,
+}
+
+impl TimerService {
+    pub fn new() -> Self {
+        Self {
+            event_time_timers: std::sync::Mutex::new(Vec::new()),
+            processing_time_timers: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Register an event-time timer.
+    pub fn register_event_time_timer(&self, timestamp: i64) {
+        self.event_time_timers.lock().unwrap().push(timestamp);
+    }
+
+    /// Register a processing-time timer.
+    pub fn register_processing_time_timer(&self, timestamp: i64) {
+        self.processing_time_timers.lock().unwrap().push(timestamp);
+    }
+
+    /// Delete an event-time timer.
+    pub fn delete_event_time_timer(&self, timestamp: i64) {
+        self.event_time_timers.lock().unwrap().retain(|&t| t != timestamp);
+    }
+
+    /// Delete a processing-time timer.
+    pub fn delete_processing_time_timer(&self, timestamp: i64) {
+        self.processing_time_timers.lock().unwrap().retain(|&t| t != timestamp);
+    }
+}
+
+/// Context for timer callbacks.
+pub struct OnTimerContext {
+    /// The firing timestamp.
+    pub timestamp: i64,
+    /// Timer service for registering new timers.
+    pub timer_service: TimerService,
+}
+
+/// Keyed timer callback context.
+pub struct KeyedOnTimerContext<K> {
+    /// The firing timestamp.
+    pub timestamp: i64,
+    /// The current key.
+    pub current_key: K,
+    /// Timer service for registering new timers.
+    pub timer_service: TimerService,
+}
+
+/// A low-level process function with access to context, timers, and side outputs.
+///
+/// Similar to Flink's ProcessFunction.
+#[async_trait]
+pub trait ProcessFunction: Send + Sync + 'static {
+    type In: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type Out: Serialize + DeserializeOwned + Send + Sync + 'static;
+
+    /// Process a single element.
+    async fn process_element(&mut self, value: Self::In, ctx: &ProcessContext) -> Vec<Self::Out>;
+
+    /// Called when a registered timer fires.
+    async fn on_timer(&mut self, _timestamp: i64, _ctx: &OnTimerContext) -> Vec<Self::Out> {
+        vec![]
+    }
+
+    fn name(&self) -> &str {
+        std::any::type_name::<Self>()
+    }
+
+    /// Create a new instance. Available on any type that derives Default.
+    fn new() -> Self where Self: Default {
+        Self::default()
+    }
+}
+
+/// A keyed process function with access to keyed state, timers, and side outputs.
+///
+/// Similar to Flink's KeyedProcessFunction.
+#[async_trait]
+pub trait KeyedProcessFunction: Send + Sync + 'static {
+    type In: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type Key: Serialize + DeserializeOwned + Send + Sync + Clone + std::hash::Hash + Eq + 'static;
+    type Out: Serialize + DeserializeOwned + Send + Sync + 'static;
+
+    /// Process a single element with keyed context.
+    async fn process_element(&mut self, value: Self::In, ctx: &KeyedProcessContext<Self::Key>) -> Vec<Self::Out>;
+
+    /// Called when a registered timer fires.
+    async fn on_timer(&mut self, _timestamp: i64, _ctx: &KeyedOnTimerContext<Self::Key>) -> Vec<Self::Out> {
+        vec![]
+    }
+
+    fn name(&self) -> &str {
+        std::any::type_name::<Self>()
+    }
+}
+
+// ============================================================================
+// Async I/O Functions (like Flink's AsyncDataStream)
+// ============================================================================
+
+/// An async I/O function for external calls (DB lookups, REST APIs, etc.).
+///
+/// Similar to Flink's AsyncFunction / AsyncDataStream.
+#[async_trait]
+pub trait AsyncIOFunction: Send + Sync + 'static {
+    type In: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type Out: Serialize + DeserializeOwned + Send + Sync + 'static;
+
+    /// Perform an async invocation (e.g., database lookup, HTTP request).
+    async fn async_invoke(&mut self, input: Self::In) -> Vec<Self::Out>;
+
+    /// Called when the async invocation times out.
+    async fn timeout(&mut self, _input: Self::In) -> Vec<Self::Out> {
+        vec![]
+    }
+
+    fn name(&self) -> &str {
+        std::any::type_name::<Self>()
+    }
+}
+
+// ============================================================================
+// Connected Stream Functions
+// ============================================================================
+
+/// A co-map function that processes elements from two connected streams.
+///
+/// Similar to Flink's CoMapFunction.
+#[async_trait]
+pub trait CoMapFunction: Send + Sync + 'static {
+    type In1: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type In2: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type Out: Serialize + DeserializeOwned + Send + Sync + 'static;
+
+    /// Process an element from the first input.
+    async fn map1(&mut self, value: Self::In1) -> Self::Out;
+
+    /// Process an element from the second input.
+    async fn map2(&mut self, value: Self::In2) -> Self::Out;
+}
+
+/// A co-process function for stateful processing on connected streams.
+///
+/// Similar to Flink's CoProcessFunction.
+#[async_trait]
+pub trait CoProcessFunction: Send + Sync + 'static {
+    type In1: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type In2: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type Out: Serialize + DeserializeOwned + Send + Sync + 'static;
+
+    /// Process an element from the first input.
+    async fn process_element1(&mut self, value: Self::In1, ctx: &RuntimeContext) -> Vec<Self::Out>;
+
+    /// Process an element from the second input.
+    async fn process_element2(&mut self, value: Self::In2, ctx: &RuntimeContext) -> Vec<Self::Out>;
+
+    fn name(&self) -> &str {
+        std::any::type_name::<Self>()
+    }
+}
+
+/// A join function that combines matched elements from a join.
+///
+/// Similar to Flink's JoinFunction.
+#[async_trait]
+pub trait JoinFunction: Send + Sync + 'static {
+    type In1: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type In2: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type Out: Serialize + DeserializeOwned + Send + Sync + 'static;
+
+    /// Combine a pair of joined elements.
+    async fn join(&mut self, first: Self::In1, second: Self::In2) -> Self::Out;
+}
+
+// ============================================================================
+// Serialization / Deserialization Schemas (like Flink's SerializationSchema)
+// ============================================================================
+
+/// Schema for deserializing bytes from external sources (like Flink's DeserializationSchema).
+pub trait DeserializationSchema: Send + Sync + 'static {
+    type Out: Serialize + DeserializeOwned + Send + Sync + 'static;
+    fn deserialize(&self, bytes: &[u8]) -> Option<Self::Out>;
+}
+
+/// Schema for serializing records to bytes for external sinks (like Flink's SerializationSchema).
+pub trait SerializationSchema: Send + Sync + 'static {
+    type In: Serialize + DeserializeOwned + Send + Sync + 'static;
+    fn serialize(&self, value: &Self::In) -> Vec<u8>;
+}
+
+/// UTF-8 string passthrough schema (default for socket/kafka string streams).
+pub struct StringSchema;
+
+impl DeserializationSchema for StringSchema {
+    type Out = String;
+    fn deserialize(&self, bytes: &[u8]) -> Option<String> {
+        std::str::from_utf8(bytes).ok().map(String::from)
+    }
+}
+
+impl SerializationSchema for StringSchema {
+    type In = String;
+    fn serialize(&self, value: &String) -> Vec<u8> {
+        value.as_bytes().to_vec()
+    }
+}
+
+/// JSON serialization/deserialization schema for typed structs.
+pub struct JsonSchema<T>(std::marker::PhantomData<T>);
+
+impl<T> JsonSchema<T> {
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<T> Default for JsonSchema<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> DeserializationSchema
+    for JsonSchema<T>
+{
+    type Out = T;
+    fn deserialize(&self, bytes: &[u8]) -> Option<T> {
+        serde_json::from_slice(bytes).ok()
+    }
+}
+
+impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> SerializationSchema
+    for JsonSchema<T>
+{
+    type In = T;
+    fn serialize(&self, value: &T) -> Vec<u8> {
+        serde_json::to_vec(value).unwrap_or_default()
+    }
+}
 
 /// Wrapper for closure-based key selectors.
 pub struct FnKeySelector<T, K, F>

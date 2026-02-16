@@ -37,6 +37,12 @@ export const OperatorNode = memo(function OperatorNode({ data }: OperatorNodePro
           </span>
         </div>
 
+        {data.uid && data.uid !== data.id && (
+          <div className="text-xs text-muted-foreground/60 font-mono truncate">
+            {data.uid}
+          </div>
+        )}
+
         <div className="text-xs text-muted-foreground">
           Parallelism: {data.parallelism}
         </div>

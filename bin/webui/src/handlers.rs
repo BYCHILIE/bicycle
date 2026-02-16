@@ -35,6 +35,7 @@ pub struct JobSummary {
 #[derive(Debug, Serialize)]
 pub struct JobDetail {
     pub job_id: String,
+    pub name: String,
     pub state: String,
     pub start_time: i64,
     pub end_time: Option<i64>,
@@ -52,6 +53,7 @@ pub struct JobMetrics {
 #[derive(Debug, Serialize)]
 pub struct TaskSummary {
     pub task_id: String,
+    pub operator_name: String,
     pub state: String,
     pub records_processed: i64,
     pub bytes_processed: i64,
@@ -148,10 +150,12 @@ pub struct JobGraphResponse {
 pub struct JobException {
     pub timestamp: i64,
     pub task_id: String,
+    pub task_index: Option<u32>,
     pub operator_name: String,
     pub message: String,
     pub stack_trace: String,
     pub root_cause: Option<String>,
+    pub location: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -282,6 +286,7 @@ pub async fn get_job(
             let state = format!("{:?}", resp.state());
             Ok(Json(JobDetail {
                 job_id: resp.job_id,
+                name: resp.job_name,
                 state,
                 start_time: resp.start_time,
                 end_time: if resp.end_time > 0 {
@@ -348,6 +353,7 @@ pub async fn get_job_tasks(
                 .iter()
                 .map(|t| TaskSummary {
                     task_id: t.task_id.clone(),
+                    operator_name: t.operator_name.clone(),
                     state: format!("{:?}", t.state()),
                     records_processed: t.records_processed,
                     bytes_processed: t.bytes_processed,
@@ -492,12 +498,16 @@ pub async fn get_job_graph(
 
             for task in &resp.task_statuses {
                 // Extract vertex_id from task_id (format: job_id-vertex_id-subtask_idx)
-                let parts: Vec<&str> = task.task_id.split('-').collect();
-                if parts.len() >= 2 {
-                    let vertex_id = parts[1].to_string();
-                    let entry = vertex_records.entry(vertex_id).or_insert((0, 0));
-                    entry.0 += task.records_processed;
-                    entry.1 += task.bytes_processed;
+                // job_id is a UUID with hyphens, so we strip it as a prefix first
+                let prefix = format!("{}-", job_id);
+                if let Some(rest) = task.task_id.strip_prefix(&prefix) {
+                    // rest is "vertex_id-subtask_idx", find last dash for subtask index
+                    if let Some(last_dash) = rest.rfind('-') {
+                        let vertex_id = rest[..last_dash].to_string();
+                        let entry = vertex_records.entry(vertex_id).or_insert((0, 0));
+                        entry.0 += task.records_processed;
+                        entry.1 += task.bytes_processed;
+                    }
                 }
             }
 
@@ -514,7 +524,7 @@ pub async fn get_job_graph(
 
                     JobGraphVertex {
                         id: v.vertex_id.clone(),
-                        uid: format!("{}-uid", v.vertex_id),
+                        uid: if v.uid.is_empty() { v.vertex_id.clone() } else { v.uid.clone() },
                         name: v.name.clone(),
                         operator_type: format!("{:?}", operator_type_enum),
                         parallelism: v.parallelism,
@@ -558,7 +568,7 @@ pub async fn get_job_exceptions(
 ) -> Result<Json<JobExceptionsResponse>, StatusCode> {
     let mut client = get_client(&state).await?;
 
-    let req = GetJobStatusRequest { job_id };
+    let req = GetJobStatusRequest { job_id: job_id.clone() };
 
     match client.get_job_status(req).await {
         Ok(response) => {
@@ -574,16 +584,70 @@ pub async fn get_job_exceptions(
                 })
                 .map(|t| {
                     let msg = &t.error_message;
+
+                    // Use operator_name from proto; fall back to task_id parsing
+                    let operator_name = if !t.operator_name.is_empty() {
+                        t.operator_name.clone()
+                    } else {
+                        let prefix = format!("{}-", job_id);
+                        if let Some(rest) = t.task_id.strip_prefix(&prefix) {
+                            if let Some(last_dash) = rest.rfind('-') {
+                                rest[..last_dash].to_string()
+                            } else {
+                                rest.to_string()
+                            }
+                        } else {
+                            t.task_id.clone()
+                        }
+                    };
+
+                    // Extract subtask index from task_id (last segment after '-')
+                    let task_index = t
+                        .task_id
+                        .rsplit('-')
+                        .next()
+                        .and_then(|s| s.parse::<u32>().ok());
+
+                    // Try to extract a root cause and location from the error message.
+                    // Convention: lines starting with "Caused by:" or "Location:" are parsed.
+                    let mut root_cause = None;
+                    let mut location = None;
+                    let mut stack_lines = Vec::new();
+                    for line in msg.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("Caused by:") {
+                            root_cause =
+                                Some(trimmed.trim_start_matches("Caused by:").trim().to_string());
+                        } else if trimmed.starts_with("Location:") {
+                            location =
+                                Some(trimmed.trim_start_matches("Location:").trim().to_string());
+                        }
+                        stack_lines.push(line.to_string());
+                    }
+
+                    // If no explicit location, try to find a plugin/crate reference
+                    if location.is_none() {
+                        for line in msg.lines() {
+                            let t = line.trim();
+                            if t.contains("::") && (t.contains("Failed to") || t.contains("Error")) {
+                                location = Some(t.to_string());
+                                break;
+                            }
+                        }
+                    }
+
                     JobException {
                         timestamp: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_millis() as i64,
                         task_id: t.task_id.clone(),
-                        operator_name: t.task_id.split('-').nth(1).unwrap_or("unknown").to_string(),
+                        task_index,
+                        operator_name,
                         message: msg.clone(),
-                        stack_trace: msg.clone(), // In real impl, would have full stack trace
-                        root_cause: None,
+                        stack_trace: stack_lines.join("\n"),
+                        root_cause,
+                        location,
                     }
                 })
                 .collect();

@@ -19,6 +19,8 @@ RUN apt-get update && apt-get install -y \
     liblz4-dev \
     libzstd-dev \
     zlib1g-dev \
+    libssl-dev \
+    pkg-config \
     autoconf \
     automake \
     libtool \
@@ -50,8 +52,8 @@ COPY bin/webui/Cargo.toml bin/webui/
 COPY bin/bicycle/Cargo.toml bin/bicycle/
 COPY bin/socket-test/Cargo.toml bin/socket-test/
 COPY bin/wordcount-socket/Cargo.toml bin/wordcount-socket/
-COPY test-jobs/wordcount/Cargo.toml test-jobs/wordcount/
 COPY jobs/wordcount-plugin/Cargo.toml jobs/wordcount-plugin/
+COPY jobs/wordcount-kafka/Cargo.toml jobs/wordcount-kafka/
 
 # Copy proto files (needed by protocol crate build.rs)
 COPY proto proto/
@@ -64,7 +66,7 @@ RUN mkdir -p crates/core/src crates/runtime/src crates/operators/src \
     crates/state/src crates/checkpoint/src crates/network/src \
     crates/protocol/src crates/connectors/src crates/api/src crates/api-macros/src crates/plugin/src \
     bin/mini-runner/src bin/jobmanager/src bin/worker/src bin/webui/src bin/bicycle/src bin/socket-test/src bin/wordcount-socket/src \
-    test-jobs/wordcount/src jobs/wordcount-plugin/src \
+    jobs/wordcount-plugin/src jobs/wordcount-kafka/src \
     && echo "fn main() {}" > bin/mini-runner/src/main.rs \
     && echo "fn main() {}" > bin/jobmanager/src/main.rs \
     && echo "fn main() {}" > bin/worker/src/main.rs \
@@ -72,8 +74,8 @@ RUN mkdir -p crates/core/src crates/runtime/src crates/operators/src \
     && echo "fn main() {}" > bin/bicycle/src/main.rs \
     && echo "fn main() {}" > bin/socket-test/src/main.rs \
     && echo "fn main() {}" > bin/wordcount-socket/src/main.rs \
-    && echo "fn main() {}" > test-jobs/wordcount/src/main.rs \
     && echo "fn main() {}" > jobs/wordcount-plugin/src/main.rs \
+    && echo "fn main() {}" > jobs/wordcount-kafka/src/main.rs \
     && touch crates/core/src/lib.rs \
     && touch crates/runtime/src/lib.rs \
     && touch crates/operators/src/lib.rs \
@@ -85,7 +87,8 @@ RUN mkdir -p crates/core/src crates/runtime/src crates/operators/src \
     && touch crates/api/src/lib.rs \
     && touch crates/api-macros/src/lib.rs \
     && touch crates/plugin/src/lib.rs \
-    && touch jobs/wordcount-plugin/src/lib.rs
+    && touch jobs/wordcount-plugin/src/lib.rs \
+    && touch jobs/wordcount-kafka/src/lib.rs
 
 # Build dependencies (this layer is cached)
 RUN cargo build --release 2>/dev/null || true
@@ -93,11 +96,10 @@ RUN cargo build --release 2>/dev/null || true
 # Copy actual source code
 COPY crates crates/
 COPY bin bin/
-COPY test-jobs test-jobs/
 COPY jobs jobs/
 
 # Touch files to invalidate cache and rebuild
-RUN find crates -name "*.rs" -exec touch {} \; && find bin -name "*.rs" -exec touch {} \; && find test-jobs -name "*.rs" -exec touch {} \; && find jobs -name "*.rs" -exec touch {} \;
+RUN find crates -name "*.rs" -exec touch {} \; && find bin -name "*.rs" -exec touch {} \; && find jobs -name "*.rs" -exec touch {} \;
 
 # Build release binaries
 RUN cargo build --release
@@ -114,6 +116,7 @@ RUN apt-get update && apt-get install -y \
     liblz4-1 \
     libzstd1 \
     zlib1g \
+    libssl3 \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
@@ -136,6 +139,8 @@ COPY --from=builder /app/target/release/socket-test bin/
 COPY --from=builder /app/target/release/wordcount-socket bin/
 COPY --from=builder /app/target/release/wordcount-plugin bin/
 COPY --from=builder /app/target/release/libwordcount_plugin.so lib/
+COPY --from=builder /app/target/release/wordcount-kafka bin/
+COPY --from=builder /app/target/release/libwordcount_kafka.so lib/
 
 # Copy configuration and job definitions
 COPY config/ config/
@@ -208,7 +213,17 @@ EXPOSE 9998 9999
 ENTRYPOINT ["bin/wordcount-plugin"]
 
 # -----------------------------------------------------------------------------
-# Stage 10: Next.js Web UI Builder
+# Stage 10: Word Count Kafka Job
+# -----------------------------------------------------------------------------
+FROM runtime AS wordcount-kafka
+
+EXPOSE 9998 9999
+# The binary outputs the job graph JSON; submit with plugin
+# Use with: bicycle submit bin/wordcount-kafka --plugin lib/libwordcount_kafka.so
+ENTRYPOINT ["bin/wordcount-kafka"]
+
+# -----------------------------------------------------------------------------
+# Stage 11: Next.js Web UI Builder
 # -----------------------------------------------------------------------------
 FROM node:20-alpine AS webui-next-builder
 

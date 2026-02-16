@@ -19,6 +19,7 @@ export interface JobMetrics {
 
 export interface JobDetail {
   job_id: string
+  name: string
   state: JobState
   start_time: number
   end_time: number | null
@@ -30,6 +31,7 @@ export type TaskState = 'Created' | 'Deploying' | 'Running' | 'Finished' | 'Fail
 
 export interface TaskSummary {
   task_id: string
+  operator_name: string
   state: TaskState
   records_processed: number
   bytes_processed: number
@@ -80,7 +82,7 @@ export interface MetricsHistory {
 }
 
 // Job graph types
-export type OperatorType = 'Source' | 'Sink' | 'Map' | 'Filter' | 'KeyBy' | 'Window' | 'Join' | 'Unknown'
+export type OperatorType = 'Source' | 'Sink' | 'Map' | 'Filter' | 'KeyBy' | 'Window' | 'Join' | 'Union' | 'Connect' | 'CoProcess' | 'SideOutput' | 'AsyncIO' | 'Process' | 'Reduce' | 'Count' | 'Unknown'
 export type PartitionStrategy = 'Forward' | 'Hash' | 'Rebalance' | 'Broadcast'
 
 export interface JobVertex {
@@ -110,10 +112,12 @@ export interface JobGraph {
 export interface JobException {
   timestamp: number
   task_id: string
+  task_index: number | null
   operator_name: string
   message: string
   stack_trace: string
   root_cause: string | null
+  location: string | null
 }
 
 export interface JobExceptions {

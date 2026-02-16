@@ -44,7 +44,6 @@ export function RecentJobs() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Job ID</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Tasks</TableHead>
@@ -58,10 +57,10 @@ export function RecentJobs() {
                   onClick={() => handleRowClick(job.job_id)}
                   className="cursor-pointer"
                 >
-                  <TableCell className="font-mono text-sm text-primary">
-                    {job.job_id}
+                  <TableCell>
+                    <div className="font-medium text-primary">{job.name}</div>
+                    <div className="text-xs text-muted-foreground font-mono">{job.job_id}</div>
                   </TableCell>
-                  <TableCell className="font-medium">{job.name}</TableCell>
                   <TableCell>
                     <JobStatusBadge state={job.state} />
                   </TableCell>

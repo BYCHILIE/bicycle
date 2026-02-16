@@ -8,6 +8,7 @@
 //! - Data flow between operators via channels
 
 use anyhow::Result;
+use bicycle_connectors::kafka::{KafkaConfig, KafkaSink, KafkaSource};
 use bicycle_connectors::socket::{SocketConfig, SocketTextSink, SocketTextSource};
 use bicycle_core::StreamMessage;
 use bicycle_network::{ChannelId, NetworkConfig, NetworkEnvironment};
@@ -453,6 +454,9 @@ impl TaskExecutor {
             ConnectorType::Socket => {
                 Self::run_socket_source(task_id, descriptor, status, internal_channels, internal_receivers).await
             }
+            ConnectorType::Kafka => {
+                Self::run_kafka_source(task_id, descriptor, status, internal_channels, internal_receivers).await
+            }
             ConnectorType::Generator => {
                 Self::run_generator_source(task_id, descriptor, status, internal_channels, internal_receivers).await
             }
@@ -569,6 +573,141 @@ impl TaskExecutor {
         }
     }
 
+    /// Kafka source - consumes messages from a Kafka topic
+    async fn run_kafka_source(
+        task_id: &str,
+        descriptor: &TaskDescriptor,
+        status: Arc<TaskStatus>,
+        internal_channels: Arc<DashMap<String, mpsc::Sender<StreamMessage<Vec<u8>>>>>,
+        _internal_receivers: Arc<DashMap<String, Arc<tokio::sync::Mutex<mpsc::Receiver<StreamMessage<Vec<u8>>>>>>>,
+    ) -> Result<()> {
+        let props = descriptor
+            .connector_config
+            .as_ref()
+            .map(|c| &c.properties)
+            .cloned()
+            .unwrap_or_default();
+
+        let brokers = props
+            .get("bootstrap.servers")
+            .or_else(|| props.get("brokers"))
+            .cloned()
+            .unwrap_or_else(|| "localhost:9092".to_string());
+        let topic = props
+            .get("topic")
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+        let group_id = props
+            .get("group.id")
+            .or_else(|| props.get("group_id"))
+            .cloned()
+            .unwrap_or_else(|| "bicycle-consumer".to_string());
+
+        info!(
+            task_id = %task_id,
+            brokers = %brokers,
+            topic = %topic,
+            group_id = %group_id,
+            "Starting Kafka source"
+        );
+
+        let mut kafka_config = KafkaConfig::new(&brokers)
+            .with_group_id(&group_id)
+            .with_topics(vec![topic.clone()]);
+
+        // Pass through additional Kafka properties (skip our meta-properties)
+        let skip_keys = ["bootstrap.servers", "brokers", "topic", "group.id", "group_id", "value.deserializer"];
+        for (key, value) in &props {
+            if !skip_keys.contains(&key.as_str()) {
+                kafka_config.properties.insert(key.clone(), value.clone());
+            }
+        }
+
+        let mut source = KafkaSource::new(kafka_config);
+        source.connect()?;
+
+        let downstream_tasks: Vec<String> = descriptor
+            .output_gates
+            .iter()
+            .map(|g| g.downstream_task_id.clone())
+            .collect();
+
+        // Pass raw Kafka message bytes directly to downstream.
+        // Data in Kafka is already JSON-encoded by the upstream sink, so no
+        // re-encoding is needed — just forward the payload bytes as-is.
+        let (tx, mut rx) = stream_channel::<Vec<u8>>(1024);
+        let mut emitter = Emitter::new(tx);
+
+        let source_status = status.clone();
+        let source_task_id = task_id.to_string();
+        tokio::spawn(async move {
+            use rdkafka::consumer::Consumer;
+            use rdkafka::message::Message;
+
+            let consumer = source.take_consumer().expect("Consumer not connected");
+
+            loop {
+                if source_status.is_cancelled() {
+                    break;
+                }
+
+                match consumer.recv().await {
+                    Ok(message) => {
+                        if let Some(payload) = message.payload() {
+                            let bytes = payload.to_vec();
+                            if let Err(e) = emitter.data(bytes).await {
+                                warn!(task_id = %source_task_id, error = %e, "Failed to emit Kafka record");
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!(task_id = %source_task_id, error = %e, "Kafka consumer error");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        });
+
+        // Forward raw bytes to downstream operators
+        loop {
+            if status.is_cancelled() {
+                return Ok(());
+            }
+
+            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                Ok(Some(msg)) => {
+                    if let StreamMessage::Data(bytes) = msg {
+                        status.increment_records(1);
+                        status.increment_bytes(bytes.len() as i64);
+
+                        for downstream_id in &downstream_tasks {
+                            let mut retries = 0;
+                            loop {
+                                if let Some(tx) = internal_channels.get(downstream_id) {
+                                    let _ = tx.send(StreamMessage::Data(bytes.clone())).await;
+                                    break;
+                                } else if retries < 50 {
+                                    retries += 1;
+                                    tokio::time::sleep(Duration::from_millis(10)).await;
+                                } else {
+                                    warn!(task_id = %task_id, downstream = %downstream_id, "Downstream channel not found after retries");
+                                    break;
+                                }
+                            }
+                        }
+
+                        debug!(task_id = %task_id, bytes = bytes.len(), "Kafka source emitted record");
+                    }
+                }
+                Ok(None) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(_) => {}
+            }
+        }
+    }
+
     /// Generator source - generates test data
     async fn run_generator_source(
         task_id: &str,
@@ -657,6 +796,9 @@ impl TaskExecutor {
             ConnectorType::Socket => {
                 Self::run_socket_sink(task_id, descriptor, status, internal_channels, internal_receivers).await
             }
+            ConnectorType::Kafka => {
+                Self::run_kafka_sink(task_id, descriptor, status, internal_channels, internal_receivers).await
+            }
             _ => {
                 // Console sink (default)
                 Self::run_console_sink(task_id, descriptor, status, internal_channels, internal_receivers).await
@@ -734,6 +876,86 @@ impl TaskExecutor {
                 Err(_) => {
                     // Timeout
                 }
+            }
+        }
+    }
+
+    /// Kafka sink - produces messages to a Kafka topic
+    async fn run_kafka_sink(
+        task_id: &str,
+        descriptor: &TaskDescriptor,
+        status: Arc<TaskStatus>,
+        _internal_channels: Arc<DashMap<String, mpsc::Sender<StreamMessage<Vec<u8>>>>>,
+        internal_receivers: Arc<DashMap<String, Arc<tokio::sync::Mutex<mpsc::Receiver<StreamMessage<Vec<u8>>>>>>>,
+    ) -> Result<()> {
+        let props = descriptor
+            .connector_config
+            .as_ref()
+            .map(|c| &c.properties)
+            .cloned()
+            .unwrap_or_default();
+
+        let brokers = props
+            .get("bootstrap.servers")
+            .or_else(|| props.get("brokers"))
+            .cloned()
+            .unwrap_or_else(|| "localhost:9092".to_string());
+        let topic = props
+            .get("topic")
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+
+        info!(
+            task_id = %task_id,
+            brokers = %brokers,
+            topic = %topic,
+            "Starting Kafka sink"
+        );
+
+        let mut kafka_config = KafkaConfig::new(&brokers).with_topic(&topic);
+
+        // Pass through additional Kafka properties (skip our meta-properties)
+        let skip_keys = ["bootstrap.servers", "brokers", "topic", "value.serializer"];
+        for (key, value) in &props {
+            if !skip_keys.contains(&key.as_str()) {
+                kafka_config.properties.insert(key.clone(), value.clone());
+            }
+        }
+
+        let mut sink = KafkaSink::new(kafka_config, task_id);
+        sink.connect()?;
+        let sink = Arc::new(sink);
+
+        let rx_arc = internal_receivers
+            .get(task_id)
+            .ok_or_else(|| anyhow::anyhow!("No receiver for task {}", task_id))?
+            .clone();
+
+        loop {
+            if status.is_cancelled() {
+                return Ok(());
+            }
+
+            let mut rx = rx_arc.lock().await;
+            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                Ok(Some(StreamMessage::Data(bytes))) => {
+                    drop(rx);
+                    status.increment_records(1);
+                    status.increment_bytes(bytes.len() as i64);
+
+                    // Send bytes directly to Kafka (already JSON-encoded from upstream)
+                    if let Err(e) = sink.send(None, &bytes).await {
+                        warn!(task_id = %task_id, error = %e, "Kafka sink write error");
+                    }
+
+                    debug!(task_id = %task_id, "Kafka sink sent record");
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    drop(rx);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(_) => {}
             }
         }
     }

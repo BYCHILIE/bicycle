@@ -56,7 +56,7 @@ export function TasksTable({ jobId }: TasksTableProps) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Task ID</TableHead>
+                <TableHead>Operator</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Records</TableHead>
                 <TableHead className="text-right">Bytes</TableHead>
@@ -65,8 +65,9 @@ export function TasksTable({ jobId }: TasksTableProps) {
             <TableBody>
               {tasks?.map((task) => (
                 <TableRow key={task.task_id}>
-                  <TableCell className="font-mono text-sm">
-                    {task.task_id}
+                  <TableCell>
+                    <div className="font-medium">{task.operator_name || task.task_id}</div>
+                    <div className="text-xs text-muted-foreground font-mono">{task.task_id}</div>
                   </TableCell>
                   <TableCell>
                     <JobStatusBadge state={task.state} />

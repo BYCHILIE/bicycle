@@ -1,15 +1,83 @@
 'use client'
 
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react'
+import { ChevronDown, ChevronRight, AlertTriangle, Copy, Check } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useJobExceptions } from '@/lib/hooks/useApi'
 import { formatTimestamp } from '@/lib/utils'
+import type { JobException } from '@/types'
 
 interface JobExceptionsProps {
   jobId: string
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Fallback for non-secure contexts
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border bg-background hover:bg-muted transition-colors"
+      title="Copy to clipboard"
+    >
+      {copied ? (
+        <>
+          <Check className="h-3 w-3 text-green-500" />
+          <span className="text-green-500">Copied</span>
+        </>
+      ) : (
+        <>
+          <Copy className="h-3 w-3" />
+          <span>Copy</span>
+        </>
+      )}
+    </button>
+  )
+}
+
+function buildCopyText(exception: JobException): string {
+  const parts: string[] = []
+  parts.push(`Operator: ${exception.operator_name}`)
+  if (exception.task_index !== null) {
+    parts.push(`Subtask: #${exception.task_index}`)
+  }
+  parts.push(`Task ID: ${exception.task_id}`)
+  parts.push(`Timestamp: ${formatTimestamp(exception.timestamp)}`)
+  if (exception.location) {
+    parts.push(`Location: ${exception.location}`)
+  }
+  if (exception.root_cause) {
+    parts.push(`Root Cause: ${exception.root_cause}`)
+  }
+  parts.push('')
+  parts.push('Error Message:')
+  parts.push(exception.message)
+  if (exception.stack_trace && exception.stack_trace !== exception.message) {
+    parts.push('')
+    parts.push('Stack Trace:')
+    parts.push(exception.stack_trace)
+  }
+  return parts.join('\n')
 }
 
 export function JobExceptions({ jobId }: JobExceptionsProps) {
@@ -90,20 +158,58 @@ export function JobExceptions({ jobId }: JobExceptionsProps) {
                       <ChevronRight className="h-4 w-4 mt-0.5 flex-shrink-0" />
                     )}
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-destructive truncate">
-                        {exception.message}
+                      <div className="font-semibold text-sm">
+                        {exception.operator_name}
+                        {exception.task_index !== null && (
+                          <span className="text-muted-foreground font-normal ml-1">
+                            #{exception.task_index}
+                          </span>
+                        )}
                       </div>
-                      <div className="text-xs text-muted-foreground mt-1 flex gap-4">
-                        <span>Task: {exception.task_id}</span>
-                        <span>Operator: {exception.operator_name}</span>
+                      <div className="font-medium text-destructive text-sm mt-1 break-words">
+                        {exception.message.split('\n')[0]}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                        {exception.location && (
+                          <span className="font-medium">
+                            {exception.location}
+                          </span>
+                        )}
                         <span>{formatTimestamp(exception.timestamp)}</span>
                       </div>
                     </div>
                   </button>
                   {isExpanded && (
-                    <div className="px-4 pb-4 pt-2 border-t bg-muted/30">
+                    <div className="px-4 pb-4 pt-2 border-t bg-muted/30 space-y-3">
+                      {/* Metadata row */}
+                      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+                        <span>
+                          <span className="font-medium">Task ID:</span>{' '}
+                          <code className="text-foreground">{exception.task_id}</code>
+                        </span>
+                        {exception.task_index !== null && (
+                          <span>
+                            <span className="font-medium">Subtask:</span>{' '}
+                            <code className="text-foreground">#{exception.task_index}</code>
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Location */}
+                      {exception.location && (
+                        <div>
+                          <div className="text-xs font-medium text-muted-foreground mb-1">
+                            Location
+                          </div>
+                          <div className="text-sm font-mono text-orange-500 dark:text-orange-400">
+                            {exception.location}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Root Cause */}
                       {exception.root_cause && (
-                        <div className="mb-3">
+                        <div>
                           <div className="text-xs font-medium text-muted-foreground mb-1">
                             Root Cause
                           </div>
@@ -112,11 +218,16 @@ export function JobExceptions({ jobId }: JobExceptionsProps) {
                           </div>
                         </div>
                       )}
+
+                      {/* Error / Stack Trace - copyable */}
                       <div>
-                        <div className="text-xs font-medium text-muted-foreground mb-1">
-                          Stack Trace
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="text-xs font-medium text-muted-foreground">
+                            Stack Trace
+                          </div>
+                          <CopyButton text={buildCopyText(exception)} />
                         </div>
-                        <pre className="text-xs font-mono bg-background p-3 rounded overflow-x-auto max-h-64">
+                        <pre className="text-xs font-mono bg-background p-3 rounded border overflow-x-auto max-h-80 whitespace-pre-wrap break-words select-all">
                           {exception.stack_trace}
                         </pre>
                       </div>
