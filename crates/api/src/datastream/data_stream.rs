@@ -5,6 +5,7 @@ use crate::function::{
 };
 use crate::graph::{AsyncProcessConfig, ConnectorConfig, Edge, OperatorType, PartitionStrategy, Vertex};
 use crate::kafka::KafkaSinkBuilder;
+use crate::pulsar::PulsarSinkBuilder;
 use serde::{de::DeserializeOwned, Serialize};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -374,6 +375,25 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> DataStream<T> {
         let new_id = self.env.next_vertex_id();
         let connector = builder.build_connector();
         let vertex = Vertex::new(&new_id, "KafkaSink", OperatorType::Sink { connector });
+        self.env.add_vertex(vertex);
+        self.env.add_edge(Edge::new(&self.vertex_id, &new_id));
+        SinkStream::new(self.env, new_id)
+    }
+
+    /// Write to a typed Pulsar sink using a builder.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// stream.pulsar_sink_to(
+    ///     PulsarSinkBuilder::<WordCount>::new("pulsar://localhost:6650", "word-counts")
+    ///         .serializer("json")
+    /// );
+    /// ```
+    pub fn pulsar_sink_to(self, builder: PulsarSinkBuilder<T>) -> SinkStream {
+        let new_id = self.env.next_vertex_id();
+        let connector = builder.build_connector();
+        let vertex = Vertex::new(&new_id, "PulsarSink", OperatorType::Sink { connector });
         self.env.add_vertex(vertex);
         self.env.add_edge(Edge::new(&self.vertex_id, &new_id));
         SinkStream::new(self.env, new_id)

@@ -117,8 +117,8 @@ pub trait TransactionalSink: Send + Sync {
 /// Wrapper that manages transactions for a sink.
 pub struct ExactlyOnceSinkWriter<S: TransactionalSink> {
     sink: Arc<S>,
-    current_transaction: RwLock<Option<TransactionId>>,
-    pending_commits: RwLock<Vec<TransactionId>>,
+    current_transaction: tokio::sync::RwLock<Option<TransactionId>>,
+    pending_commits: tokio::sync::RwLock<Vec<TransactionId>>,
     commit_notifier: mpsc::Sender<TransactionId>,
 }
 
@@ -126,8 +126,8 @@ impl<S: TransactionalSink> ExactlyOnceSinkWriter<S> {
     pub fn new(sink: Arc<S>, commit_notifier: mpsc::Sender<TransactionId>) -> Self {
         Self {
             sink,
-            current_transaction: RwLock::new(None),
-            pending_commits: RwLock::new(Vec::new()),
+            current_transaction: tokio::sync::RwLock::new(None),
+            pending_commits: tokio::sync::RwLock::new(Vec::new()),
             commit_notifier,
         }
     }
@@ -137,11 +137,11 @@ impl<S: TransactionalSink> ExactlyOnceSinkWriter<S> {
         match msg {
             StreamMessage::Data(record) => {
                 // Ensure we have an active transaction
-                if self.current_transaction.read().is_none() {
+                if self.current_transaction.read().await.is_none() {
                     // Start a new transaction with checkpoint 0 (will be updated on barrier)
                     let id = TransactionId::new(0, self.sink.sink_id());
                     self.sink.begin_transaction(id.clone()).await?;
-                    *self.current_transaction.write() = Some(id);
+                    *self.current_transaction.write().await = Some(id);
                 }
 
                 // Write record
@@ -162,10 +162,11 @@ impl<S: TransactionalSink> ExactlyOnceSinkWriter<S> {
 
             StreamMessage::End => {
                 // Commit any pending transaction on stream end
-                if let Some(id) = self.current_transaction.read().clone() {
+                let id = self.current_transaction.read().await.clone();
+                if let Some(id) = id {
                     self.sink.pre_commit(&id).await?;
                     self.sink.commit(&id).await?;
-                    *self.current_transaction.write() = None;
+                    *self.current_transaction.write().await = None;
                 }
             }
         }
@@ -181,35 +182,36 @@ impl<S: TransactionalSink> ExactlyOnceSinkWriter<S> {
         );
 
         // Pre-commit current transaction
-        if let Some(id) = self.current_transaction.write().take() {
+        let current_id = self.current_transaction.write().await.take();
+        if let Some(id) = current_id {
             self.sink.pre_commit(&id).await?;
-            self.pending_commits.write().push(id);
+            self.pending_commits.write().await.push(id);
         }
 
         // Start new transaction for the next checkpoint interval
         let new_id = TransactionId::new(barrier.checkpoint_id, self.sink.sink_id());
         self.sink.begin_transaction(new_id.clone()).await?;
-        *self.current_transaction.write() = Some(new_id);
+        *self.current_transaction.write().await = Some(new_id);
 
         Ok(())
     }
 
     /// Notify that a checkpoint completed (called by checkpoint coordinator).
     pub async fn notify_checkpoint_complete(&self, checkpoint_id: u64) -> Result<()> {
-        let mut pending = self.pending_commits.write();
         let mut to_commit = Vec::new();
+        {
+            let mut pending = self.pending_commits.write().await;
 
-        // Find all transactions up to and including this checkpoint
-        pending.retain(|id| {
-            if id.checkpoint_id <= checkpoint_id {
-                to_commit.push(id.clone());
-                false
-            } else {
-                true
-            }
-        });
-
-        drop(pending);
+            // Find all transactions up to and including this checkpoint
+            pending.retain(|id| {
+                if id.checkpoint_id <= checkpoint_id {
+                    to_commit.push(id.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
 
         // Commit transactions
         for id in to_commit {
@@ -227,20 +229,20 @@ impl<S: TransactionalSink> ExactlyOnceSinkWriter<S> {
 
     /// Handle checkpoint failure - abort pending transactions.
     pub async fn notify_checkpoint_failed(&self, checkpoint_id: u64) -> Result<()> {
-        let mut pending = self.pending_commits.write();
         let mut to_abort = Vec::new();
+        {
+            let mut pending = self.pending_commits.write().await;
 
-        // Find transactions for this checkpoint
-        pending.retain(|id| {
-            if id.checkpoint_id == checkpoint_id {
-                to_abort.push(id.clone());
-                false
-            } else {
-                true
-            }
-        });
-
-        drop(pending);
+            // Find transactions for this checkpoint
+            pending.retain(|id| {
+                if id.checkpoint_id == checkpoint_id {
+                    to_abort.push(id.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
 
         // Abort transactions
         for id in to_abort {

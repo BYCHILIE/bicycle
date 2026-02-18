@@ -744,6 +744,7 @@ pub enum ConnectorType {
     File = 3,
     /// Built-in data generator for testing
     Generator = 4,
+    Pulsar = 5,
 }
 impl ConnectorType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -757,6 +758,7 @@ impl ConnectorType {
             ConnectorType::Kafka => "CONNECTOR_TYPE_KAFKA",
             ConnectorType::File => "CONNECTOR_TYPE_FILE",
             ConnectorType::Generator => "CONNECTOR_TYPE_GENERATOR",
+            ConnectorType::Pulsar => "CONNECTOR_TYPE_PULSAR",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -767,6 +769,7 @@ impl ConnectorType {
             "CONNECTOR_TYPE_KAFKA" => Some(Self::Kafka),
             "CONNECTOR_TYPE_FILE" => Some(Self::File),
             "CONNECTOR_TYPE_GENERATOR" => Some(Self::Generator),
+            "CONNECTOR_TYPE_PULSAR" => Some(Self::Pulsar),
             _ => None,
         }
     }

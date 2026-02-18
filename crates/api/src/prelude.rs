@@ -20,11 +20,18 @@ pub use crate::function::{
 
 // Serialization schemas
 pub use crate::function::{
-    DeserializationSchema, JsonSchema, SerializationSchema, StringSchema,
+    ConnectorSchema, DeserializationSchema, JsonSchema, SerializationSchema, StringSchema,
 };
+#[cfg(feature = "bincode-serde")]
+pub use crate::function::BincodeSchema;
+#[cfg(feature = "avro")]
+pub use crate::function::AvroSchema;
 
 // Kafka builders
 pub use crate::kafka::{DeliveryGuarantee, KafkaSinkBuilder, KafkaSourceBuilder};
+
+// Pulsar builders
+pub use crate::pulsar::{PulsarSinkBuilder, PulsarSourceBuilder};
 
 // Context types
 pub use crate::context::{Context, MemoryStateBackend, RuntimeContext, StateBackend, StateBackendExt, TaskInfo};

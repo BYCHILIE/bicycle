@@ -1,19 +1,22 @@
 //! gRPC service implementation for the JobManager.
 
+mod job_lifecycle;
+use job_lifecycle::{spawn_checkpoint_stats_updater, spawn_checkpoint_trigger_bridge};
+
 use crate::scheduler::Scheduler;
-use crate::state::{JobInfo, JobManagerState, PhysicalTask, TaskInfo, WorkerInfo};
+use crate::state::{JobInfo, JobManagerState, WorkerInfo};
 use bicycle_checkpoint::{CheckpointConfig, CheckpointCoordinator};
 use bicycle_core::JobId;
 use bicycle_protocol::control::{
-    control_plane_server::ControlPlane, worker_control_client::WorkerControlClient,
+    control_plane_server::ControlPlane,
     AckCheckpointRequest, AckCheckpointResponse, CancelJobRequest, CancelJobResponse,
-    CancelTaskRequest, CancelTaskResponse, DeployTaskRequest, DeployTaskResponse,
+    CancelTaskRequest, CancelTaskResponse, DeployTaskRequest, DeployTaskResponse, OperatorType,
     GetClusterInfoRequest, GetClusterInfoResponse, GetJobStatusRequest, GetJobStatusResponse,
     GetMetricsRequest, GetMetricsResponse, HeartbeatRequest, HeartbeatResponse, JobMetrics,
     JobState, JobSummary, ListJobsRequest, ListJobsResponse, ListWorkersRequest,
     ListWorkersResponse, RegisterWorkerRequest, RegisterWorkerResponse, SubmitJobRequest,
     SubmitJobResponse, TaskCommand, TaskCommandType, TaskState, TaskStatus,
-    TriggerCheckpointRequest, TriggerCheckpointResponse, WorkerMetrics, WorkerResources,
+    TriggerCheckpointRequest, TriggerCheckpointResponse, WorkerResources,
     WorkerState, WorkerSummary,
 };
 use parking_lot::RwLock;
@@ -84,95 +87,8 @@ impl ControlPlaneService {
         commands
     }
 
-    /// Deploy tasks to workers.
-    async fn deploy_tasks_to_workers(
-        &self,
-        job_id: &str,
-        physical_tasks: &[PhysicalTask],
-        task_locations: &HashMap<String, String>,
-    ) -> Result<Vec<String>, String> {
-        let mut deployed = Vec::new();
-        let mut errors = Vec::new();
-
-        // Group tasks by worker
-        let mut tasks_by_worker: HashMap<String, Vec<&PhysicalTask>> = HashMap::new();
-        for task in physical_tasks {
-            if let Some(worker_id) = task_locations.get(&task.task_id) {
-                tasks_by_worker
-                    .entry(worker_id.clone())
-                    .or_default()
-                    .push(task);
-            }
-        }
-
-        // Deploy to each worker
-        for (worker_id, tasks) in tasks_by_worker {
-            // Get worker address
-            let worker_addr = if let Some(worker) = self.state.workers.get(&worker_id) {
-                format!("http://{}:{}", worker.hostname, worker.data_port)
-            } else {
-                errors.push(format!("Worker {} not found", worker_id));
-                continue;
-            };
-
-            // Connect to worker
-            let mut client = match WorkerControlClient::connect(worker_addr.clone()).await {
-                Ok(client) => client,
-                Err(e) => {
-                    errors.push(format!(
-                        "Failed to connect to worker {}: {}",
-                        worker_id, e
-                    ));
-                    continue;
-                }
-            };
-
-            // Deploy each task
-            for task in tasks {
-                let request = self.scheduler.create_deploy_request(task, task_locations);
-
-                if let Some(req) = request {
-                    match client.deploy_task(req).await {
-                        Ok(response) => {
-                            let resp = response.into_inner();
-                            if resp.success {
-                                deployed.push(task.task_id.clone());
-                                // Update task state
-                                if let Some(mut task_info) =
-                                    self.state.tasks.get_mut(&task.task_id)
-                                {
-                                    task_info.state = TaskState::Deploying;
-                                }
-                                info!(
-                                    task_id = %task.task_id,
-                                    worker_id = %worker_id,
-                                    "Task deployed successfully"
-                                );
-                            } else {
-                                errors.push(format!(
-                                    "Worker rejected task {}: {}",
-                                    task.task_id, resp.message
-                                ));
-                            }
-                        }
-                        Err(e) => {
-                            errors.push(format!(
-                                "Failed to deploy task {}: {}",
-                                task.task_id, e
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(deployed)
-        } else {
-            Err(errors.join("; "))
-        }
-    }
 }
+
 
 #[tonic::async_trait]
 impl ControlPlane for ControlPlaneService {
@@ -333,14 +249,67 @@ impl ControlPlane for ControlPlaneService {
     ) -> Result<Response<AckCheckpointResponse>, Status> {
         let req = request.into_inner();
 
-        debug!(
+        info!(
             job_id = %req.job_id,
             task_id = %req.task_id,
             checkpoint_id = req.checkpoint_id,
             "Checkpoint acknowledgment received"
         );
 
-        // TODO: Forward to checkpoint coordinator
+        // Forward to checkpoint coordinator
+        // Extract ack_sender while holding the lock, then drop the lock before awaiting
+        let ack_sender = {
+            let coordinators = self.checkpoint_coordinators.read();
+            coordinators.get(&req.job_id).map(|c| c.ack_sender())
+        };
+
+        if let Some(ack_sender) = ack_sender {
+            // Build a TaskId from the ack request
+            // Extract vertex_id and subtask_index from task_id (format: job_id-vertex_id-subtask_idx)
+            let prefix = format!("{}-", req.job_id);
+            let (vertex_id, subtask_index) = if let Some(rest) = req.task_id.strip_prefix(&prefix) {
+                if let Some(last_dash) = rest.rfind('-') {
+                    let vid = rest[..last_dash].to_string();
+                    let idx = rest[last_dash + 1..].parse::<u32>().unwrap_or(0);
+                    (vid, idx)
+                } else {
+                    (rest.to_string(), 0)
+                }
+            } else {
+                (req.task_id.clone(), 0)
+            };
+
+            let task_id = bicycle_core::TaskId::new(
+                JobId::from_string(&req.job_id),
+                &vertex_id,
+                subtask_index,
+            );
+
+            info!(
+                raw_task_id = %req.task_id,
+                parsed_vertex_id = %vertex_id,
+                parsed_subtask_index = subtask_index,
+                constructed_task_id = %task_id,
+                "Parsed checkpoint ack task ID"
+            );
+
+            let metadata = req.metadata.as_ref();
+            let ack = bicycle_checkpoint::CheckpointAck {
+                task_id,
+                checkpoint_id: req.checkpoint_id as u64,
+                state_handle: bicycle_core::StateHandle {
+                    path: metadata.map(|m| m.state_handle.clone()).unwrap_or_default(),
+                    size: metadata.map(|m| m.state_size_bytes as u64).unwrap_or(0),
+                    checksum: None,
+                },
+            };
+
+            if let Err(e) = ack_sender.send(ack).await {
+                warn!(error = %e, "Failed to forward checkpoint ack to coordinator");
+            }
+        } else {
+            warn!(job_id = %req.job_id, "No checkpoint coordinator found for job");
+        }
 
         Ok(Response::new(AckCheckpointResponse { success: true }))
     }
@@ -409,22 +378,24 @@ impl ControlPlane for ControlPlaneService {
         job.state = JobState::Running;
         self.state.jobs.insert(job_id.clone(), job);
 
-        // Create checkpoint coordinator
+        // Create checkpoint coordinator and register sink tasks (but don't start yet)
         let checkpoint_interval = config.checkpoint_interval_ms.max(1000);
         let coordinator = self.create_checkpoint_coordinator(&job_id, checkpoint_interval);
 
-        // Register all tasks with checkpoint coordinator
+        // Register only sink tasks with checkpoint coordinator (they are the ack endpoints)
         for (task_id, _) in &result.scheduled {
             if let Some(task) = self.state.tasks.get(task_id) {
-                coordinator.register_task(bicycle_core::TaskId::new(
-                    JobId::from_string(&job_id),
-                    &task.vertex_id,
-                    task.subtask_index as u32,
-                ));
+                if task.operator_type == OperatorType::Sink {
+                    coordinator.register_task(bicycle_core::TaskId::new(
+                        JobId::from_string(&job_id),
+                        &task.vertex_id,
+                        task.subtask_index as u32,
+                    ));
+                }
             }
         }
 
-        // Deploy tasks to workers
+        // Deploy tasks to workers FIRST — coordinator must not trigger before tasks exist
         match self
             .deploy_tasks_to_workers(&job_id, &physical_tasks, &task_locations)
             .await
@@ -434,6 +405,31 @@ impl ControlPlane for ControlPlaneService {
                     job_id = %job_id,
                     tasks = deployed.len(),
                     "Job submitted and tasks deployed successfully"
+                );
+
+                // Now that all tasks are deployed, start the checkpoint coordinator
+                let coord_clone = coordinator.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = coord_clone.run().await {
+                        error!(error = %e, "Checkpoint coordinator exited with error");
+                    }
+                });
+
+                // Spawn bridge task: subscribe to coordinator triggers and forward to source AND sink workers.
+                // We send to sources (barriers propagate downstream) AND directly to sinks
+                // (sinks with no upstream connection, e.g. due to Forward partition mismatch, get barriers).
+                spawn_checkpoint_trigger_bridge(
+                    self.state.clone(),
+                    coordinator.clone(),
+                    job_id.clone(),
+                    task_locations.clone(),
+                );
+
+                // Spawn checkpoint stats updater
+                spawn_checkpoint_stats_updater(
+                    self.state.clone(),
+                    coordinator.clone(),
+                    job_id.clone(),
                 );
 
                 Ok(Response::new(SubmitJobResponse {

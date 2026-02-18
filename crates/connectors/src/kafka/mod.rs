@@ -15,5 +15,5 @@ mod sink;
 mod config;
 
 pub use source::KafkaSource;
-pub use sink::KafkaSink;
+pub use sink::{KafkaSink, KafkaRecord, TransactionalKafkaSink};
 pub use config::KafkaConfig;

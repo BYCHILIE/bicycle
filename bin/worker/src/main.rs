@@ -90,11 +90,14 @@ impl Worker {
         let control_port = bind_addr.port() as i32;
 
         // Create executor
-        let executor = Arc::new(TaskExecutor::new(
+        let executor = TaskExecutor::new(
             worker_id.clone(),
             args.state_dir.clone(),
             args.slots,
-        ));
+        );
+
+        // Set JobManager address for checkpoint ack forwarding
+        executor.set_jobmanager_addr(args.jobmanager.clone());
 
         Ok(Self {
             worker_id,

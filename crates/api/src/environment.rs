@@ -3,8 +3,9 @@
 //! The StreamEnvironment is the entry point for creating streaming jobs.
 
 use crate::datastream::{DataStream, StreamEnvInner};
-use crate::graph::{ConnectorConfig, Edge, JobConfig, JobGraph, OperatorType, Vertex};
+use crate::graph::{ConnectorConfig, JobConfig, JobGraph, OperatorType, Vertex};
 use crate::kafka::KafkaSourceBuilder;
+use crate::pulsar::PulsarSourceBuilder;
 use crate::Result;
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
@@ -111,6 +112,33 @@ impl StreamEnvironment {
         DataStream::new(self.inner.clone(), vertex_id)
     }
 
+    /// Create a typed source from a Pulsar source builder.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let stream: DataStream<MyEvent> = env.add_pulsar_source(
+    ///     PulsarSourceBuilder::<MyEvent>::new("pulsar://localhost:6650", "events")
+    ///         .subscription("my-sub")
+    ///         .deserializer("json")
+    /// );
+    /// ```
+    pub fn add_pulsar_source<T>(&self, builder: PulsarSourceBuilder<T>) -> DataStream<T>
+    where
+        T: Serialize + DeserializeOwned + Send + Sync + 'static,
+    {
+        let vertex_id = self.inner.next_vertex_id();
+        let connector = builder.build_connector();
+        let vertex = Vertex::new(
+            &vertex_id,
+            "PulsarSource",
+            OperatorType::Source { connector },
+        );
+
+        self.inner.add_vertex(vertex);
+        DataStream::new(self.inner.clone(), vertex_id)
+    }
+
     /// Create a generator source for testing.
     pub fn generator_source(&self, rate_ms: u64) -> DataStream<String> {
         let vertex_id = self.inner.next_vertex_id();
@@ -180,8 +208,32 @@ impl StreamEnvironment {
             }
         }
 
+        // Remap vertex IDs: use uid as the vertex ID when set (like Flink),
+        // falling back to the auto-generated vertex_N ID.
+        let mut id_remap: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for vertex in &mut vertices {
+            if let Some(ref uid) = vertex.uid {
+                let old_id = vertex.id.clone();
+                vertex.id = uid.clone();
+                id_remap.insert(old_id, uid.clone());
+            }
+        }
+
+        // Update edge references to use the new vertex IDs
+        let mut edges = self.inner.get_edges();
+        if !id_remap.is_empty() {
+            for edge in &mut edges {
+                if let Some(new_id) = id_remap.get(&edge.source_id) {
+                    edge.source_id = new_id.clone();
+                }
+                if let Some(new_id) = id_remap.get(&edge.target_id) {
+                    edge.target_id = new_id.clone();
+                }
+            }
+        }
+
         graph.vertices = vertices;
-        graph.edges = self.inner.get_edges();
+        graph.edges = edges;
         graph.config = self.config.clone();
         graph
     }

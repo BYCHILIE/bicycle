@@ -36,6 +36,7 @@ pub mod environment;
 pub mod function;
 pub mod graph;
 pub mod kafka;
+pub mod pulsar;
 pub mod optimizer;
 pub mod prelude;
 pub mod state;
@@ -54,6 +55,7 @@ pub use function::{
     KeyedOnTimerContext, KeyedProcessContext, OnTimerContext, ProcessContext, TimerService,
 };
 pub use kafka::{DeliveryGuarantee, KafkaSinkBuilder, KafkaSourceBuilder};
+pub use pulsar::{PulsarSinkBuilder, PulsarSourceBuilder};
 pub use optimizer::{JobGraphOptimizer, OptimizedJobGraph, OperatorChain, OptimizerConfig};
 pub use state::{ListState, MapState, ValueState};
 

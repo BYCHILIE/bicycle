@@ -113,6 +113,8 @@ type RestoreFn = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> BicycleR
 type DestroyFn = unsafe extern "C" fn(*mut c_void);
 type FreeBytsesFn = unsafe extern "C" fn(BicycleBytes);
 type FreeResultFn = unsafe extern "C" fn(BicycleResult);
+/// Schema conversion function: `fn(ptr, len) -> BicycleBytes`
+pub type SchemaFn = unsafe extern "C" fn(*const u8, usize) -> BicycleBytes;
 
 /// A loaded native plugin library.
 pub struct LoadedPlugin {
@@ -323,6 +325,18 @@ impl LoadedPlugin {
     /// Destroy a function instance.
     pub fn destroy_function(&self, handle: *mut c_void) {
         unsafe { (self.destroy)(handle) };
+    }
+
+    /// Look up a schema conversion function by name (e.g., `"bicycle_schema_decode_my_fn"`).
+    ///
+    /// Returns `None` if the symbol is not exported by the plugin.
+    pub fn get_schema_fn(&self, fn_name: &str) -> Option<SchemaFn> {
+        unsafe {
+            self._library
+                .get::<SchemaFn>(fn_name.as_bytes())
+                .ok()
+                .map(|f| *f)
+        }
     }
 }
 

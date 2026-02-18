@@ -261,6 +261,17 @@ impl ConnectorConfig {
         }
     }
 
+    /// Create a Pulsar connector config.
+    pub fn pulsar(service_url: impl Into<String>, topic: impl Into<String>) -> Self {
+        let mut props = HashMap::new();
+        props.insert("service.url".to_string(), service_url.into());
+        props.insert("topic".to_string(), topic.into());
+        Self {
+            connector_type: ConnectorType::Pulsar,
+            properties: props,
+        }
+    }
+
     /// Create a generator connector config.
     pub fn generator(rate_ms: u64) -> Self {
         let mut props = HashMap::new();
@@ -280,6 +291,7 @@ pub enum ConnectorType {
     Kafka,
     File,
     Generator,
+    Pulsar,
 }
 
 /// Window type configuration.

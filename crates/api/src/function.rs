@@ -517,6 +517,35 @@ pub trait SerializationSchema: Send + Sync + 'static {
     fn serialize(&self, value: &Self::In) -> Vec<u8>;
 }
 
+/// Connector-level schema that describes how to encode/decode at the Kafka boundary.
+///
+/// Used with `.with_schema()` on `KafkaSourceBuilder` / `KafkaSinkBuilder` to insert
+/// the appropriate property key into the connector configuration.
+pub trait ConnectorSchema: Send + Sync + 'static {
+    /// Returns `(property_key, property_value)` for the source (decoder) side.
+    fn decoder_property(&self) -> (&'static str, String);
+    /// Returns `(property_key, property_value)` for the sink (encoder) side.
+    fn encoder_property(&self) -> (&'static str, String);
+}
+
+impl ConnectorSchema for StringSchema {
+    fn decoder_property(&self) -> (&'static str, String) {
+        ("value.deserializer", "string".to_string())
+    }
+    fn encoder_property(&self) -> (&'static str, String) {
+        ("value.serializer", "string".to_string())
+    }
+}
+
+impl<T: Send + Sync + 'static> ConnectorSchema for JsonSchema<T> {
+    fn decoder_property(&self) -> (&'static str, String) {
+        ("value.deserializer", "json".to_string())
+    }
+    fn encoder_property(&self) -> (&'static str, String) {
+        ("value.serializer", "json".to_string())
+    }
+}
+
 /// UTF-8 string passthrough schema (default for socket/kafka string streams).
 pub struct StringSchema;
 
@@ -564,6 +593,149 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> SerializationSchem
     type In = T;
     fn serialize(&self, value: &T) -> Vec<u8> {
         serde_json::to_vec(value).unwrap_or_default()
+    }
+}
+
+/// Bincode serialization schema for compact binary encoding.
+#[cfg(feature = "bincode-serde")]
+pub struct BincodeSchema<T> {
+    /// Optional plugin function name for schema dispatch via `.named("my_fn")`.
+    pub fn_name: Option<String>,
+    _marker: std::marker::PhantomData<T>,
+}
+
+#[cfg(feature = "bincode-serde")]
+impl<T> BincodeSchema<T> {
+    pub fn new() -> Self {
+        Self { fn_name: None, _marker: std::marker::PhantomData }
+    }
+
+    /// Create a schema that dispatches to a plugin-exported schema function named
+    /// `bicycle_schema_decode_{name}` / `bicycle_schema_encode_{name}`.
+    pub fn named(name: &str) -> Self {
+        Self { fn_name: Some(name.to_string()), _marker: std::marker::PhantomData }
+    }
+}
+
+#[cfg(feature = "bincode-serde")]
+impl<T> Default for BincodeSchema<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "bincode-serde")]
+impl<T: Send + Sync + 'static> ConnectorSchema for BincodeSchema<T> {
+    fn decoder_property(&self) -> (&'static str, String) {
+        if let Some(ref name) = self.fn_name {
+            ("schema.decode.fn", format!("bicycle_schema_decode_{}", name))
+        } else {
+            ("value.deserializer", "bincode".to_string())
+        }
+    }
+    fn encoder_property(&self) -> (&'static str, String) {
+        if let Some(ref name) = self.fn_name {
+            ("schema.encode.fn", format!("bicycle_schema_encode_{}", name))
+        } else {
+            ("value.serializer", "bincode".to_string())
+        }
+    }
+}
+
+#[cfg(feature = "bincode-serde")]
+impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> DeserializationSchema
+    for BincodeSchema<T>
+{
+    type Out = T;
+    fn deserialize(&self, bytes: &[u8]) -> Option<T> {
+        bincode::deserialize(bytes).ok()
+    }
+}
+
+#[cfg(feature = "bincode-serde")]
+impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> SerializationSchema
+    for BincodeSchema<T>
+{
+    type In = T;
+    fn serialize(&self, value: &T) -> Vec<u8> {
+        bincode::serialize(value).unwrap_or_default()
+    }
+}
+
+/// Avro serialization schema with explicit schema definition.
+#[cfg(feature = "avro")]
+pub struct AvroSchema<T> {
+    schema: apache_avro::Schema,
+    _marker: std::marker::PhantomData<T>,
+    /// Optional plugin function name for schema dispatch via `.named()`.
+    pub fn_name: Option<String>,
+}
+
+#[cfg(feature = "avro")]
+impl<T> AvroSchema<T> {
+    pub fn new(schema_json: &str) -> Self {
+        let schema = apache_avro::Schema::parse_str(schema_json)
+            .expect("Invalid Avro schema JSON");
+        Self {
+            schema,
+            _marker: std::marker::PhantomData,
+            fn_name: None,
+        }
+    }
+
+    /// Create a schema that dispatches to a plugin-exported schema function named
+    /// `bicycle_schema_decode_{name}` / `bicycle_schema_encode_{name}`.
+    pub fn named(schema_json: &str, name: &str) -> Self {
+        let schema = apache_avro::Schema::parse_str(schema_json)
+            .expect("Invalid Avro schema JSON");
+        Self {
+            schema,
+            _marker: std::marker::PhantomData,
+            fn_name: Some(name.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "avro")]
+impl<T: Send + Sync + 'static> ConnectorSchema for AvroSchema<T> {
+    fn decoder_property(&self) -> (&'static str, String) {
+        if let Some(ref name) = self.fn_name {
+            ("schema.decode.fn", format!("bicycle_schema_decode_{}", name))
+        } else {
+            ("value.deserializer", "avro".to_string())
+        }
+    }
+    fn encoder_property(&self) -> (&'static str, String) {
+        if let Some(ref name) = self.fn_name {
+            ("schema.encode.fn", format!("bicycle_schema_encode_{}", name))
+        } else {
+            ("value.serializer", "avro".to_string())
+        }
+    }
+}
+
+#[cfg(feature = "avro")]
+impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> DeserializationSchema
+    for AvroSchema<T>
+{
+    type Out = T;
+    fn deserialize(&self, bytes: &[u8]) -> Option<T> {
+        use apache_avro::from_avro_datum;
+        let mut reader = bytes;
+        let value = from_avro_datum(&self.schema, &mut reader, None).ok()?;
+        apache_avro::from_value::<T>(&value).ok()
+    }
+}
+
+#[cfg(feature = "avro")]
+impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> SerializationSchema
+    for AvroSchema<T>
+{
+    type In = T;
+    fn serialize(&self, value: &T) -> Vec<u8> {
+        use apache_avro::to_avro_datum;
+        let avro_value = apache_avro::to_value(value).unwrap_or(apache_avro::types::Value::Null);
+        to_avro_datum(&self.schema, avro_value).unwrap_or_default()
     }
 }
 

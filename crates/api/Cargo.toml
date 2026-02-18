@@ -15,6 +15,12 @@ anyhow.workspace = true
 # Proc macro for bicycle_main
 bicycle-api-macros = { path = "../api-macros", optional = true }
 
+# Optional serialization formats
+bincode = { version = "1", optional = true }
+apache-avro = { version = "0.17", optional = true }
+
 [features]
-default = ["macros"]
+default = ["macros", "bincode-serde", "avro"]
 macros = ["bicycle-api-macros"]
+bincode-serde = ["bincode"]
+avro = ["apache-avro"]

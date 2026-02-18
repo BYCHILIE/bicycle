@@ -62,6 +62,60 @@ pub use wrapper::{
 pub use bicycle_api::prelude::*;
 pub use bicycle_api::{AsyncFunction, RichAsyncFunction};
 
+// ============================================================================
+// Plugin schema helpers — call these from `#[no_mangle] extern "C"` exports
+// ============================================================================
+
+/// Convert external bytes → internal JSON bytes using a `DeserializationSchema`.
+///
+/// # Example
+///
+/// ```ignore
+/// #[no_mangle]
+/// pub extern "C" fn bicycle_schema_decode_my_fn(ptr: *const u8, len: usize)
+///     -> bicycle_plugin::BicycleBytes
+/// {
+///     bicycle_plugin::schema_decode::<BincodeSchema<MyType>>(ptr, len)
+/// }
+/// ```
+pub fn schema_decode<S>(ptr: *const u8, len: usize) -> BicycleBytes
+where
+    S: DeserializationSchema + Default,
+    S::Out: serde::Serialize,
+{
+    let schema = S::default();
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    match schema.deserialize(bytes).and_then(|v| serde_json::to_vec(&v).ok()) {
+        Some(json) => BicycleBytes::success(json),
+        None => BicycleBytes::error(1, "Schema decode failed".to_string()),
+    }
+}
+
+/// Convert internal JSON bytes → external bytes using a `SerializationSchema`.
+///
+/// # Example
+///
+/// ```ignore
+/// #[no_mangle]
+/// pub extern "C" fn bicycle_schema_encode_my_fn(ptr: *const u8, len: usize)
+///     -> bicycle_plugin::BicycleBytes
+/// {
+///     bicycle_plugin::schema_encode::<BincodeSchema<MyType>>(ptr, len)
+/// }
+/// ```
+pub fn schema_encode<S>(ptr: *const u8, len: usize) -> BicycleBytes
+where
+    S: SerializationSchema + Default,
+    S::In: serde::de::DeserializeOwned,
+{
+    let schema = S::default();
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    match serde_json::from_slice::<S::In>(bytes) {
+        Ok(value) => BicycleBytes::success(schema.serialize(&value)),
+        Err(e) => BicycleBytes::error(1, format!("JSON decode failed: {}", e)),
+    }
+}
+
 /// Generate FFI exports for a plugin with only `AsyncFunction` implementations.
 ///
 /// # Example

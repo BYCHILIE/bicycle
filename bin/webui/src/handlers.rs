@@ -168,7 +168,7 @@ pub struct JobExceptionsResponse {
 // Metrics History types
 // ============================================================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MetricsHistoryPoint {
     pub timestamp: i64,
     pub records_per_sec: f64,
@@ -370,11 +370,40 @@ pub async fn get_job_tasks(
 
 /// Get checkpoints for a job.
 pub async fn get_job_checkpoints(
-    State(_state): State<Arc<AppState>>,
-    Path(_job_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
 ) -> Result<Json<Vec<CheckpointInfo>>, StatusCode> {
-    // TODO: Implement when checkpoint history is available
-    Ok(Json(vec![]))
+    // Query job status to get checkpoint metrics
+    let mut client = get_client(&state).await?;
+
+    let req = GetJobStatusRequest { job_id };
+
+    match client.get_job_status(req).await {
+        Ok(response) => {
+            let resp = response.into_inner();
+            let metrics = resp.metrics.as_ref();
+
+            let last_id = metrics.map(|m| m.last_checkpoint_id).unwrap_or(0);
+            let last_time = metrics.map(|m| m.last_checkpoint_time).unwrap_or(0);
+
+            if last_id > 0 {
+                // Return available checkpoint info
+                let mut checkpoints = Vec::new();
+                for i in 1..=last_id {
+                    checkpoints.push(CheckpointInfo {
+                        checkpoint_id: i,
+                        timestamp: if i == last_id { last_time } else { 0 },
+                        duration_ms: 0,
+                        state_size_bytes: 0,
+                    });
+                }
+                Ok(Json(checkpoints))
+            } else {
+                Ok(Json(vec![]))
+            }
+        }
+        Err(_) => Ok(Json(vec![])),
+    }
 }
 
 /// Get cluster information.
@@ -666,37 +695,10 @@ pub async fn get_job_exceptions(
 
 /// Get metrics history for charts.
 pub async fn get_metrics_history(
-    State(_state): State<Arc<AppState>>,
-    axum::extract::Query(query): axum::extract::Query<MetricsHistoryQuery>,
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(_query): axum::extract::Query<MetricsHistoryQuery>,
 ) -> Result<Json<MetricsHistoryResponse>, StatusCode> {
-    let minutes = query.minutes.unwrap_or(15);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-
-    // Generate synthetic data points for demo
-    // In real implementation, would query from metrics store
-    let points: Vec<MetricsHistoryPoint> = (0..minutes)
-        .map(|i| {
-            let timestamp = now - ((minutes - i) as i64 * 60 * 1000);
-            MetricsHistoryPoint {
-                timestamp,
-                records_per_sec: 1000.0 + (i as f64 * 10.0) + (rand_simple() * 200.0),
-                bytes_per_sec: 50000.0 + (i as f64 * 500.0) + (rand_simple() * 10000.0),
-            }
-        })
-        .collect();
-
+    let history = state.metrics_history.read().await;
+    let points: Vec<MetricsHistoryPoint> = history.iter().cloned().collect();
     Ok(Json(MetricsHistoryResponse { points }))
-}
-
-// Simple pseudo-random for demo data
-fn rand_simple() -> f64 {
-    use std::time::SystemTime;
-    let nanos = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    (nanos % 1000) as f64 / 1000.0
 }

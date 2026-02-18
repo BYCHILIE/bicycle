@@ -179,6 +179,7 @@ fn connector_type_to_proto(s: &str) -> i32 {
         "Generator" => 3,
         "Console" => 4,
         "File" => 5,
+        "Pulsar" => 5,
         _ => 0,
     }
 }

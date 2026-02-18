@@ -285,6 +285,7 @@ enum ConnectorType {
     CONNECTOR_TYPE_KAFKA = 2;
     CONNECTOR_TYPE_FILE = 3;
     CONNECTOR_TYPE_GENERATOR = 4;  // Built-in data generator for testing
+    CONNECTOR_TYPE_PULSAR = 5;
 }
 
 message JobEdge {

@@ -5,22 +5,78 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
+use std::collections::VecDeque;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, warn};
 
-use crate::handlers;
+use bicycle_protocol::control::{
+    control_plane_client::ControlPlaneClient, GetMetricsRequest,
+};
+
+use crate::handlers::{self, MetricsHistoryPoint};
 
 /// Application state shared across handlers.
 pub struct AppState {
     pub jobmanager_addr: String,
+    /// Ring buffer of metrics history points, polled periodically
+    pub metrics_history: RwLock<VecDeque<MetricsHistoryPoint>>,
 }
 
 /// Run the web server.
 pub async fn run_server(bind: &str, jobmanager: &str) -> Result<()> {
     let state = Arc::new(AppState {
         jobmanager_addr: jobmanager.to_string(),
+        metrics_history: RwLock::new(VecDeque::with_capacity(180)),
+    });
+
+    // Spawn background task to poll metrics every 10 seconds
+    let poll_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        let mut prev_records: i64 = 0;
+        let mut prev_bytes: i64 = 0;
+
+        loop {
+            interval.tick().await;
+
+            let addr = format!("http://{}", poll_state.jobmanager_addr);
+            match ControlPlaneClient::connect(addr).await {
+                Ok(mut client) => {
+                    if let Ok(response) = client.get_metrics(GetMetricsRequest {}).await {
+                        let resp = response.into_inner();
+
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as i64;
+
+                        // Calculate rates (per second, 10s interval)
+                        let records_delta = resp.total_records_processed - prev_records;
+                        let bytes_delta = resp.total_bytes_processed - prev_bytes;
+                        prev_records = resp.total_records_processed;
+                        prev_bytes = resp.total_bytes_processed;
+
+                        let point = MetricsHistoryPoint {
+                            timestamp: now,
+                            records_per_sec: records_delta as f64 / 10.0,
+                            bytes_per_sec: bytes_delta as f64 / 10.0,
+                        };
+
+                        let mut history = poll_state.metrics_history.write().await;
+                        if history.len() >= 180 {
+                            history.pop_front();
+                        }
+                        history.push_back(point);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to poll metrics from JobManager: {}", e);
+                }
+            }
+        }
     });
 
     let app = Router::new()

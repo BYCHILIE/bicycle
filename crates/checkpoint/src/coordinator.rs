@@ -70,6 +70,7 @@ impl CheckpointCoordinator {
 
     /// Register a task that participates in checkpointing.
     pub fn register_task(&self, task_id: TaskId) {
+        info!(task = %task_id, "Registering task for checkpointing");
         self.tasks.write().insert(task_id);
     }
 
@@ -141,9 +142,17 @@ impl CheckpointCoordinator {
     pub fn process_ack(&self, ack: CheckpointAck) -> Result<Option<CompletedCheckpoint>> {
         let mut current = self.current_checkpoint.write();
 
-        let pending = current
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("No checkpoint in progress"))?;
+        let pending = match current.as_mut() {
+            Some(p) => p,
+            None => {
+                debug!(
+                    task = %ack.task_id,
+                    checkpoint_id = ack.checkpoint_id,
+                    "Ignoring late checkpoint ack (no checkpoint in progress)"
+                );
+                return Ok(None);
+            }
+        };
 
         if ack.checkpoint_id != pending.checkpoint_id {
             debug!(
@@ -154,10 +163,25 @@ impl CheckpointCoordinator {
             return Ok(None);
         }
 
+        info!(
+            checkpoint_id = ack.checkpoint_id,
+            task = %ack.task_id,
+            "Processing checkpoint ack"
+        );
+
         pending.acknowledged_tasks.insert(ack.task_id.clone());
         pending.state_handles.insert(ack.task_id, ack.state_handle);
 
         let all_tasks = self.tasks.read();
+
+        debug!(
+            checkpoint_id = pending.checkpoint_id,
+            acked = pending.acknowledged_tasks.len(),
+            total = all_tasks.len(),
+            acked_tasks = ?pending.acknowledged_tasks.iter().map(|t| format!("{}", t)).collect::<Vec<_>>(),
+            registered_tasks = ?all_tasks.iter().map(|t| format!("{}", t)).collect::<Vec<_>>(),
+            "Checkpoint ack progress"
+        );
 
         if pending.acknowledged_tasks.len() == all_tasks.len() {
             // Checkpoint complete!
@@ -246,15 +270,34 @@ impl CheckpointCoordinator {
     /// Run the checkpoint coordinator loop.
     pub async fn run(&self) -> Result<()> {
         let mut interval = tokio::time::interval(self.config.interval);
+        // Skip the immediate first tick — let tasks fully initialize before triggering
+        interval.tick().await;
+
         let mut ack_rx = self
             .ack_rx
             .write()
             .take()
             .ok_or_else(|| anyhow::anyhow!("Coordinator already running"))?;
 
+        // Wait a bit for tasks to be fully running before first checkpoint
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        info!(
+            job_id = %self.job_id,
+            interval_ms = self.config.interval.as_millis(),
+            registered_tasks = self.tasks.read().len(),
+            "Checkpoint coordinator started"
+        );
+
         loop {
             tokio::select! {
                 _ = interval.tick() => {
+                    let task_count = self.tasks.read().len();
+                    info!(
+                        job_id = %self.job_id,
+                        registered_tasks = task_count,
+                        "Triggering periodic checkpoint"
+                    );
                     // Trigger periodic checkpoint
                     if let Err(e) = self.trigger_checkpoint(false) {
                         debug!(error = %e, "Failed to trigger checkpoint");
